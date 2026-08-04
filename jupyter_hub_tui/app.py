@@ -88,15 +88,13 @@ class JupyterHubTUI(App):
     CSS = CSS
 
     BINDINGS = [
-        Binding("q", "quit", "Quit"),
-        Binding("r", "refresh", "Refresh"),
-        Binding("1", "connect_node('pub')", "Pub", show=False),
-        Binding("2", "connect_node('cobalt')", "Cobalt", show=False),
-        Binding("3", "connect_node('npx-submitter')", "NPX", show=False),
-        Binding("m", "show_manual", "Manual"),
-        Binding("j", "launch_jupyter", "Jupyter"),
-        Binding("e", "edit_node", "Edit Node"),
-        Binding("k", "setup_keys", "SSH Keys"),
+        Binding("escape", "quit", "Quit"),
+        Binding("ctrl+r", "refresh", "Refresh"),
+        Binding("ctrl+n", "new_connection", "Connect"),
+        Binding("ctrl+m", "show_manual", "Manual"),
+        Binding("ctrl+j", "launch_jupyter", "Jupyter"),
+        Binding("ctrl+e", "edit_node", "Edit Node"),
+        Binding("ctrl+k", "setup_keys", "SSH Keys"),
     ]
 
     def __init__(self):
@@ -124,6 +122,41 @@ class JupyterHubTUI(App):
         self._update_status()
         self._render_welcome()
         self._populate_file_tree()
+        self._node_names = list(self._ssh.nodes.keys())
+
+    def on_key(self, event) -> None:
+        # If the terminal is running, forward all keys to it.
+        if self._term_widget is not None and self._term_widget.is_running:
+            self._term_widget.send_key(event.key, event.character)
+            event.prevent_default()
+            event.stop()
+            return
+        # Quick-connect: number keys match nodes by index.
+        if event.character and event.character.isdigit():
+            idx = int(event.character) - 1
+            if 0 <= idx < len(self._node_names):
+                self.action_connect_node(self._node_names[idx])
+                event.prevent_default()
+                event.stop()
+
+    def action_new_connection(self) -> None:
+        # Stop the terminal and return to dashboard view.
+        if self._term_widget is not None:
+            self._term_widget.stop()
+            self._term_widget.remove()
+            self._term_widget = None
+        content = self.query_one("#content-area", Static)
+        content.display = True
+        content.focus()
+
+    def on_terminal_display_exited(self, event: TerminalDisplay.Exited) -> None:
+        # SSH process exited: clean up and restore dashboard.
+        if self._term_widget is not None:
+            self._term_widget = None
+        content = self.query_one("#content-area", Static)
+        content.display = True
+        content.update("[yellow]SSH session ended.[/]")
+        content.focus()
 
     def _populate_nodes(self) -> None:
         lv = self.query_one("#node-list", ListView)

@@ -16,15 +16,14 @@ Replaces JupyterHub dependency for SSH, git, venv, and notebook workflows.
 
 | Key | Action |
 |-----|--------|
-| `1` | Connect to pub node |
-| `2` | Connect to cobalt node |
-| `3` | Connect to npx-submitter node |
-| `e` | Edit active node details (host, user, port, proxy) |
-| `m` | View cluster manual |
-| `j` | Launch Jupyter on active node (SSH tunnel + euporie) |
-| `k` | Generate and copy SSH keys to all nodes |
-| `r` | Refresh status bar and file tree |
-| `q` | Quit |
+| `1`-`9` | Connect to node by index |
+| `Ctrl+N` | Disconnect and return to dashboard |
+| `Ctrl+E` | Edit active node details (host, user, port, proxy) |
+| `Ctrl+M` | View cluster manual |
+| `Ctrl+J` | Launch Jupyter on active node (SSH tunnel + euporie) |
+| `Ctrl+K` | Generate and copy SSH keys to all nodes |
+| `Ctrl+R` | Refresh status bar and file tree |
+| `Esc` | Quit |
 
 Node selection also works by arrow-navigating the list and pressing Enter.
 
