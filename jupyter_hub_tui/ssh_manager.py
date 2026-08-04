@@ -62,8 +62,9 @@ class SSHManager:
     def raw_ssh_command(self, name: str) -> list[str]:
         # Plain ssh without kitty wrapper. For embedded terminal.
         # ControlMaster lets _ssh_prefix commands reuse this connection.
+        # Wrapped in bash with ssh-agent so key passphrase is asked once.
         node = self._nodes[name]
-        cmd = [
+        ssh_args = [
             "ssh", "-tt",
             "-o", "ControlMaster=auto",
             "-o", f"ControlPath={_control_path(name)}",
@@ -72,8 +73,17 @@ class SSHManager:
         ]
         if node.proxy and node.proxy in self._nodes:
             proxy = self._nodes[node.proxy]
-            cmd += ["-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}"]
-        return cmd
+            ssh_args += ["-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}"]
+        ssh_str = " ".join(ssh_args)
+        # ssh-agent + ssh-add asks for passphrase once. Proxy and target
+        # connections all reuse the agent, no triple-prompt.
+        script = (
+            f"eval $(ssh-agent -s) >/dev/null 2>&1; "
+            "ssh-add ~/.ssh/id_ed25519 2>/dev/null || true; "
+            f"trap 'kill $SSH_AGENT_PID' EXIT; "
+            f"{ssh_str}"
+        )
+        return ["bash", "-c", script]
 
     def command(self, name: str) -> list[str]:
         # Build the ssh command for a node. Uses kitty +kitten ssh when available
@@ -315,10 +325,12 @@ def _self_check() -> None:
     cmd = mgr.command("worker-1")
     assert "-J" in cmd, f"proxy jump missing: {cmd}"
     raw = mgr.raw_ssh_command("worker-1")
-    assert raw[0] == "ssh", f"raw command should start with ssh: {raw}"
-    assert "ProxyJump" in " ".join(raw), "ProxyJump missing from raw"
-    assert "ControlMaster" in " ".join(raw), "ControlMaster missing"
-    assert "tui-ssh-worker-1" in " ".join(raw), "per-node ControlPath missing"
+    raw_str = " ".join(raw)
+    assert raw[0] == "bash", f"raw command should start with bash wrapper: {raw}"
+    assert "ProxyJump" in raw_str, "ProxyJump missing from raw"
+    assert "ControlMaster" in raw_str, "ControlMaster missing"
+    assert "tui-ssh-worker-1" in raw_str, "per-node ControlPath missing"
+    assert "ssh-agent" in raw_str, "ssh-agent wrapper missing"
     print("SSH self-check passed")
 
 

@@ -115,6 +115,7 @@ class TerminalDisplay(Widget):
         self._poll_timer = None
         self._command: list[str] = []
         self._pending_start = False
+        self._connected = False
 
     @property
     def pty_active(self) -> bool:
@@ -134,10 +135,18 @@ class TerminalDisplay(Widget):
             self.send_key(event.key, event.character)
             event.prevent_default()
             event.stop()
+        elif self._pending_start:
+            # Eat all keys while waiting for PTY fork so digits
+            # don't trigger quick_connect during passphrase entry.
+            event.prevent_default()
+            event.stop()
 
     def start(self, command: list[str]) -> None:
         self._command = command
         self._pending_start = True
+        self._connected = False
+        # Focusable immediately so digits/keys go to PTY, not app bindings.
+        self.can_focus = True
         self._try_start()
         if self._pending_start:
             self.set_timer(0.05, self._try_start)
@@ -227,6 +236,7 @@ class TerminalDisplay(Widget):
             if not data:
                 self._handle_exit()
                 return
+            self._connected = True
             self._stream.feed(data.decode("utf-8", errors="replace"))
             self._refresh_display()
         if self._pid is not None:
@@ -257,6 +267,8 @@ class TerminalDisplay(Widget):
         self.refresh()
 
     def render(self) -> Text:
+        if not self._connected:
+            return Text("Connecting...", style="yellow on #1d1f21")
         if not self._lines:
             return Text(" ", style="white on #1d1f21")
         parts = []
@@ -278,6 +290,8 @@ class TerminalDisplay(Widget):
 
     def stop(self) -> None:
         self._pty_running = False
+        self._pending_start = False
+        self._connected = False
         self.can_focus = False
         self._stop_timer()
         if self._pid is not None:

@@ -347,7 +347,8 @@ class JupyterHubTUI(App):
         self._term._resize_pty()
 
     def action_git_picker(self) -> None:
-        if self._term.pty_active:
+        if not self._ssh.active:
+            self.notify("No active node.", severity="warning")
             return
         self.push_screen(GitPickerScreen(self._data, self._ssh, self._on_git_saved))
 
