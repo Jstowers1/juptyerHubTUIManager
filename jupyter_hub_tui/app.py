@@ -39,10 +39,22 @@ Screen {
     padding: 0 1;
 }
 
+#left-panel:focus-within {
+    border: solid $accent;
+}
+
 #right-panel {
     width: 3fr;
     border: solid $primary;
     padding: 0 1;
+}
+
+#right-panel:focus-within {
+    border: solid $accent;
+}
+
+#term-display:focus {
+    border: solid $accent;
 }
 
 .node-list-label {
@@ -93,8 +105,10 @@ class JupyterHubTUI(App):
         Binding("ctrl+n", "new_connection", "Connect"),
         Binding("ctrl+m", "show_manual", "Manual"),
         Binding("ctrl+j", "launch_jupyter", "Jupyter"),
-        Binding("ctrl+e", "edit_node", "Edit Node"),
         Binding("ctrl+k", "setup_keys", "SSH Keys"),
+        Binding("ctrl+e", "edit_node", "Edit Node"),
+        Binding("tab", "focus_left", "Nodes"),
+        Binding("shift+tab", "focus_terminal", "Terminal"),
     ]
 
     def __init__(self):
@@ -135,7 +149,7 @@ class JupyterHubTUI(App):
         if event.character and event.character.isdigit():
             idx = int(event.character) - 1
             if 0 <= idx < len(self._node_names):
-                self.action_connect_node(self._node_names[idx])
+                self.run_worker(self.action_connect_node(self._node_names[idx]))
                 event.prevent_default()
                 event.stop()
 
@@ -236,9 +250,9 @@ class JupyterHubTUI(App):
         # Handle node selection from the list.
         if hasattr(event.list_view, "id") and event.list_view.id == "node-list":
             name = event.item.data
-            self.action_connect_node(name)
+            self.run_worker(self.action_connect_node(name))
 
-    def action_connect_node(self, name: str) -> None:
+    async def action_connect_node(self, name: str) -> None:
         # Connect to a node in the embedded terminal.
         if name not in self._ssh.nodes:
             self.notify(f"Unknown node: {name}", severity="error")
@@ -256,11 +270,20 @@ class JupyterHubTUI(App):
             self._term_widget = None
         # Start the embedded terminal.
         self._term_widget = TerminalDisplay(id="term-display")
-        self.query_one("#right-panel").mount(self._term_widget)
+        await self.query_one("#right-panel").mount(self._term_widget)
         cmd = self._ssh.launch(name)
         self._term_widget.start(cmd)
         self._term_widget.focus()
         self.notify(f"Connecting to: {node.name} ({node.host})")
+
+    def action_focus_left(self) -> None:
+        self.query_one("#node-list", ListView).focus()
+
+    def action_focus_terminal(self) -> None:
+        if self._term_widget is not None:
+            self._term_widget.focus()
+        else:
+            self.query_one("#content-area", Static).focus()
 
     def action_refresh(self) -> None:
         self._update_status()

@@ -12,6 +12,7 @@ import termios
 from typing import Optional
 
 import pyte
+from rich.text import Text
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widget import Widget
@@ -33,6 +34,14 @@ def key_to_bytes(key: str, char: str | None) -> bytes:
         "end": b"\x1b[F",
         "pageup": b"\x1b[5~",
         "pagedown": b"\x1b[6~",
+        "ctrl+c": b"\x03",
+        "ctrl+d": b"\x04",
+        "ctrl+z": b"\x1a",
+        "ctrl+l": b"\x0c",
+        "ctrl+a": b"\x01",
+        "ctrl+e": b"\x05",
+        "ctrl+w": b"\x17",
+        "ctrl+u": b"\x15",
     }
     if key in special:
         return special[key]
@@ -44,12 +53,15 @@ def key_to_bytes(key: str, char: str | None) -> bytes:
 class TerminalDisplay(Widget):
     # Renders a pyte screen as Textual content.
 
+    can_focus = True
+
     DEFAULT_CSS = """
     TerminalDisplay {
         background: #1d1f21;
         color: #c5c8c6;
         padding: 0 1;
         overflow: hidden;
+        border: tall $accent;
     }
     """
 
@@ -96,6 +108,11 @@ class TerminalDisplay(Widget):
             except OSError:
                 pass
 
+    def _stop_timer(self) -> None:
+        if self._poll_timer is not None:
+            self._poll_timer.stop()
+            self._poll_timer = None
+
     def _poll_pty(self) -> None:
         # Read PTY output, feed to pyte, check exit.
         if not self._running or self._master_fd is None:
@@ -128,6 +145,7 @@ class TerminalDisplay(Widget):
         if not self._running:
             return
         self._running = False
+        self._stop_timer()
         if self._master_fd is not None:
             try:
                 os.close(self._master_fd)
@@ -142,12 +160,15 @@ class TerminalDisplay(Widget):
         self._lines = lines
         self.refresh()
 
-    def render(self) -> str:
-        return "\n".join(self._lines) if self._lines else ""
+    def render(self) -> Text:
+        if not self._lines:
+            return Text("")
+        return Text("\n".join(self._lines), style="white on #1d1f21")
 
     def stop(self) -> None:
         # Kill the PTY process and clean up.
         self._running = False
+        self._stop_timer()
         if self._pid is not None:
             try:
                 os.kill(self._pid, 15)
@@ -160,6 +181,9 @@ class TerminalDisplay(Widget):
             except OSError:
                 pass
             self._master_fd = None
+
+    def on_unmount(self) -> None:
+        self.stop()
 
     def resize(self, cols: int, rows: int) -> None:
         # Resize the pyte screen and PTY.
