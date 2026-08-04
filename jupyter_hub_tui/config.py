@@ -36,3 +36,20 @@ def venv_path(data: dict[str, Any]) -> str:
 
 def jupyter_settings(data: dict[str, Any]) -> dict[str, Any]:
     return data.get("jupyter", {})
+
+
+def save(data: dict[str, Any]) -> None:
+    # Write config to config.json. Strips internal keys first.
+    clean = {k: v for k, v in data.items() if not k.startswith("_")}
+    with open(_CONFIG_FILE, "w") as f:
+        json.dump(clean, f, indent=2)
+
+
+def update_node(data: dict[str, Any], name: str, **fields: Any) -> dict[str, Any]:
+    # Update a single node's fields in the data dict. Returns updated dict.
+    if "nodes" not in data:
+        data["nodes"] = {}
+    if name not in data["nodes"]:
+        data["nodes"][name] = {}
+    data["nodes"][name].update(fields)
+    return data
