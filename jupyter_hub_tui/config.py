@@ -42,6 +42,11 @@ def remote_venv_path(data: dict[str, Any]) -> str:
     return data.get("venv", {}).get("remote_path", "")
 
 
+def venv_activate_cmd(data: dict[str, Any]) -> str:
+    # Command sent to remote shell to toggle venv. User-defined.
+    return data.get("venv", {}).get("activate_cmd", "")
+
+
 def git_repo_path(data: dict[str, Any]) -> str:
     return data.get("git", {}).get("repo_path", ".")
 

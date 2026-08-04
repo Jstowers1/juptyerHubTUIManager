@@ -205,7 +205,7 @@ class JupyterHubTUI(App):
         hp.write("  Ctrl+K       Set up SSH keys")
         hp.write("  Ctrl+M       View cluster manual")
         hp.write("  Ctrl+R       Refresh status / file tree")
-        hp.write("  Ctrl+O       Activate remote venv")
+        hp.write("  Ctrl+O       Toggle remote venv (from config)")
         hp.write("")
         hp.write("[cyan]Git[/]")
         hp.write("  Ctrl+G       Pick git repo path (remote)")
@@ -258,6 +258,16 @@ class JupyterHubTUI(App):
         loop = asyncio.get_event_loop()
         active = self._ssh.active
         if not active:
+            return
+        # Wait for ControlMaster socket to come up (user enters passphrase).
+        for _ in range(30):
+            if await loop.run_in_executor(
+                None, self._ssh.check_master, active.name
+            ):
+                break
+            await asyncio.sleep(1)
+        else:
+            self.notify("SSH connection timed out.", severity="warning")
             return
         repo_path = cfg.git_repo_path(self._data)
         file_entries = await loop.run_in_executor(
@@ -363,18 +373,16 @@ class JupyterHubTUI(App):
         if not self._ssh.active:
             self.notify("No active SSH session.", severity="warning")
             return
-        remote_venv = cfg.remote_venv_path(self._data)
-        if not remote_venv:
-            self.notify("No remote venv path in config.", severity="warning")
+        cmd = cfg.venv_activate_cmd(self._data)
+        if not cmd:
+            self.notify("No venv.activate_cmd in config.", severity="warning")
             return
         term = self._active_term()
         if not term.pty_active:
             self.notify("Terminal not active.", severity="warning")
             return
-        # Go home, source bashrc, activate venv.
-        cmd = f"cd ~ && source ~/.bashrc && source {remote_venv}/bin/activate\n"
-        term.send_input(cmd)
-        self.notify(f"Activating venv: {remote_venv}")
+        term.send_input(cmd + "\n")
+        self.notify("Venv toggle sent")
 
     def action_close_tab(self) -> None:
         tabs = self.query_one("#term-tabs", TabbedContent)

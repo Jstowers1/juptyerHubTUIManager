@@ -117,6 +117,21 @@ class SSHManager:
         ]
         return cmd
 
+    def check_master(self, name: str) -> bool:
+        # Check if ControlMaster socket for this node is alive.
+        node = self._nodes[name]
+        cmd = [
+            "ssh",
+            "-o", f"ControlPath={_control_path(name)}",
+            "-O", "check",
+            f"{node.user}@{node.host}",
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False
+        return result.returncode == 0
+
     def list_remote_dir(self, name: str, path: str = "~") -> list[dict]:
         cmd = self._ssh_prefix(name) + [
             "-o", "ConnectTimeout=5",
