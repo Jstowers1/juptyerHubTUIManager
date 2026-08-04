@@ -101,16 +101,21 @@ class JupyterHubTUI(App):
     TITLE = "Jupyter Hub TUI"
     CSS = CSS
 
+    # priority=True fires before any focused widget can swallow the key.
+    # digit keys: quick-connect to nodes 1-9.
     BINDINGS = [
-        Binding("escape", "quit", "Quit"),
-        Binding("ctrl+r", "refresh", "Refresh"),
-        Binding("ctrl+n", "new_connection", "Dashboard"),
-        Binding("ctrl+m", "show_manual", "Manual"),
-        Binding("ctrl+j", "launch_jupyter", "Jupyter"),
-        Binding("ctrl+k", "setup_keys", "SSH Keys"),
-        Binding("ctrl+e", "edit_node", "Edit Node"),
-        Binding("tab", "focus_left", "Nodes"),
-        Binding("shift+tab", "focus_terminal", "Terminal"),
+        Binding("escape", "quit", "Quit", priority=True),
+        Binding("ctrl+r", "refresh", "Refresh", priority=True),
+        Binding("ctrl+n", "new_connection", "Dashboard", priority=True),
+        Binding("ctrl+m", "show_manual", "Manual", priority=True),
+        Binding("ctrl+j", "launch_jupyter", "Jupyter", priority=True),
+        Binding("ctrl+k", "setup_keys", "SSH Keys", priority=True),
+        Binding("ctrl+e", "edit_node", "Edit Node", priority=True),
+        Binding("tab", "focus_left", "Nodes", priority=True),
+        Binding("shift+tab", "focus_terminal", "Terminal", priority=True),
+        Binding("1", "connect_node('pub')", show=False, priority=True),
+        Binding("2", "connect_node('cobalt')", show=False, priority=True),
+        Binding("3", "connect_node('npx-submitter')", show=False, priority=True),
     ]
 
     def __init__(self):
@@ -153,14 +158,9 @@ class JupyterHubTUI(App):
             self._term.send_key(event.key, event.character)
             event.prevent_default()
             event.stop()
-            return
-        # Quick-connect: number keys match nodes by index.
-        if event.character and event.character.isdigit():
-            idx = int(event.character) - 1
-            if 0 <= idx < len(self._node_names):
-                self._start_ssh(self._node_names[idx])
-                event.prevent_default()
-                event.stop()
+
+    def action_connect_node(self, name: str) -> None:
+        self._start_ssh(name)
 
     def _start_ssh(self, name: str) -> None:
         # Stop old session, start new one in the same widget.
