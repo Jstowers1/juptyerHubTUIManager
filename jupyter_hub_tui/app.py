@@ -11,8 +11,6 @@ from textual.screen import ModalScreen
 from textual.widgets import Footer, Header, Static, ListView, ListItem, Label
 from textual.widgets import Input, Button, Tree
 
-from textual.widgets._tree import TreeNode
-
 from . import config as cfg
 from . import venv
 from .git_status import status as git_status_info
@@ -102,10 +100,12 @@ class JupyterHubTUI(App):
     TITLE = "Jupyter Hub TUI"
     CSS = CSS
 
-    # priority=True fires before any widget can swallow the key.
-    # Digit/tab actions self-check is_running so they no-op during SSH.
+    # Ctrl combos are priority so they fire during SSH. Digits and tab
+    # are NOT priority: priority bindings fire before the terminal
+    # sees the key, which eats password characters. Non-priority
+    # bindings only fire when no widget consumed the key, and the
+    # terminal's own on_key stops the event during SSH.
     BINDINGS = [
-        Binding("escape", "quit", "Quit", priority=True),
         Binding("ctrl+r", "refresh", "Refresh", priority=True),
         Binding("ctrl+n", "new_connection", "Dashboard", priority=True),
         Binding("ctrl+m", "show_manual", "Manual", priority=True),
@@ -114,10 +114,11 @@ class JupyterHubTUI(App):
         Binding("ctrl+e", "edit_node", "Edit Node", priority=True),
         Binding("ctrl+h", "show_help", "Help", priority=True),
         Binding("ctrl+g", "git_picker", "Git Repo", priority=True),
-        Binding("tab", "cycle_focus", "Focus", priority=True),
-        Binding("1", "quick_connect(0)", show=False, priority=True),
-        Binding("2", "quick_connect(1)", show=False, priority=True),
-        Binding("3", "quick_connect(2)", show=False, priority=True),
+        Binding("escape", "quit", "Quit"),
+        Binding("tab", "cycle_focus", show=False),
+        Binding("1", "quick_connect(0)", show=False),
+        Binding("2", "quick_connect(1)", show=False),
+        Binding("3", "quick_connect(2)", show=False),
     ]
 
     def __init__(self):
@@ -194,16 +195,10 @@ class JupyterHubTUI(App):
     # --- Actions ---
 
     def action_quick_connect(self, idx: int) -> None:
-        # Number key quick-connect. No-op during SSH.
-        if self._term.is_running:
-            return
         if 0 <= idx < len(self._node_names):
             self._start_ssh(self._node_names[idx])
 
     def action_cycle_focus(self) -> None:
-        # Tab: toggle between node list and content. No-op during SSH.
-        if self._term.is_running:
-            return
         focused = self.focused
         left = self.query_one("#left-panel")
         if focused is not None and left in focused.ancestors_with_self:
@@ -272,86 +267,47 @@ class JupyterHubTUI(App):
         tree.clear()
         tree.root.set_label("Files")
         active = self._ssh.active
-        if active:
-            # Remote file tree.
-            tree.root.set_label(f"{active.name}:~/")
-            tree.root.data = {"node": active.name, "path": "~"}
-            try:
-                entries = self._ssh.list_remote_dir(active.name, "~")
-            except Exception:
-                tree.root.add_leaf("[red]SSH connection failed[/]")
-                return
-            if not entries:
-                tree.root.add_leaf("[dim](empty)[/]")
-            for e in entries:
-                tree.root.add(e["name"], allow_expand=e["is_dir"])
-            tree.root.expand()
-        else:
-            # Local file tree (fallback when not connected).
-            repo_path = cfg.git_repo_path(self._data)
-            if repo_path == ".":
-                repo_path = str(Path(__file__).resolve().parent.parent)
-            root = Path(repo_path).expanduser()
-            if not root.is_dir():
-                tree.root.add_leaf("[red]Repo path not found[/]")
-                return
-            tree.root.set_label(root.name)
-            tree.root.data = {"local": True, "path": str(root)}
-            self._add_local_tree_node(tree.root, root, depth=1)
-            tree.root.expand()
-
-    def _add_local_tree_node(self, node: TreeNode, path: Path, depth: int) -> None:
-        if depth <= 0:
+        if not active:
+            tree.root.add_leaf("[dim]Connect to browse files[/]")
             return
+        repo_path = cfg.git_repo_path(self._data)
+        # Browse the git repo path if set, else home dir.
+        browse_path = repo_path if repo_path != "." else "~"
+        tree.root.set_label(f"{active.name}:{browse_path}")
+        tree.root.data = {"node": active.name, "path": browse_path}
         try:
-            entries = sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name))
-        except PermissionError:
+            entries = self._ssh.list_remote_dir(active.name, browse_path)
+        except Exception:
+            tree.root.add_leaf("[red]SSH connection failed[/]")
             return
-        for entry in entries:
-            if entry.name.startswith("."):
-                continue
-            if entry.is_dir():
-                child = node.add(entry.name, allow_expand=True)
-                self._add_local_tree_node(child, entry, depth - 1)
-            else:
-                node.add_leaf(entry.name)
+        if not entries:
+            tree.root.add_leaf("[dim](empty)[/]")
+        for e in entries:
+            tree.root.add(e["name"], allow_expand=e["is_dir"])
+        tree.root.expand()
 
     def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
         node = event.node
-        if node is self.query_one("#file-tree", Tree).root:
+        tree = self.query_one("#file-tree", Tree)
+        if node is tree.root:
             return
-        root = self.query_one("#file-tree", Tree).root
+        root = tree.root
         if not root.data:
             return
-        # Build full path by walking from root to this node.
         labels = []
         cur = node
         while cur is not None and cur is not root:
             labels.append(str(cur.label))
             cur = cur.parent
         labels.reverse()
-        if root.data.get("local"):
-            base = Path(root.data["path"])
-            full = base.joinpath(*labels) if labels else base
-            try:
-                entries = sorted(full.iterdir(), key=lambda p: (not p.is_dir(), p.name))
-            except (PermissionError, NotADirectoryError):
-                return
-            node.allow_expand = False
-            for e in entries:
-                if e.name.startswith("."):
-                    continue
-                node.add(e.name, allow_expand=e["is_dir"])
-        elif root.data.get("node"):
-            node_name = root.data["node"]
-            full_path = root.data["path"] + "/" + "/".join(labels)
-            try:
-                entries = self._ssh.list_remote_dir(node_name, full_path)
-            except Exception:
-                return
-            node.allow_expand = False
-            for e in entries:
-                node.add(e["name"], allow_expand=e["is_dir"])
+        node_name = root.data["node"]
+        full_path = root.data["path"] + "/" + "/".join(labels)
+        try:
+            entries = self._ssh.list_remote_dir(node_name, full_path)
+        except Exception:
+            return
+        for e in entries:
+            node.add(e["name"], allow_expand=e["is_dir"])
 
     def _update_status(self) -> None:
         bar = self.query_one("#status-bar", Static)
@@ -363,19 +319,26 @@ class JupyterHubTUI(App):
         else:
             node_text = "[dim]NO CONNECTION[/]"
         repo_path = cfg.git_repo_path(self._data)
-        if repo_path == ".":
-            repo_path = str(Path(__file__).resolve().parent.parent)
-        gs = git_status_info(repo_path)
-        if gs:
-            dirty_text = "[red]*[/]" if gs.dirty else ""
-            ahead_behind = ""
-            if gs.ahead:
-                ahead_behind += f" +{gs.ahead}"
-            if gs.behind:
-                ahead_behind += f" -{gs.behind}"
-            git_text = f"  [blue]git:{gs.branch}{dirty_text}{ahead_behind}[/]"
-        else:
-            git_text = ""
+        git_text = ""
+        if active and repo_path != ".":
+            porcelain = self._ssh.remote_git_status(active.name, repo_path)
+            if porcelain:
+                first_line = porcelain.splitlines()[0]
+                branch = ""
+                if "..." in first_line:
+                    branch = first_line.split("...")[0].replace("## ", "")
+                elif "No commits yet" not in first_line:
+                    branch = first_line.replace("## ", "").split("...")[0]
+                dirty = any(
+                    not line.startswith("##") for line in porcelain.splitlines()
+                )
+                dirty_text = "[red]*[/]" if dirty else ""
+                git_text = f"  [blue]git:{branch}{dirty_text}[/]"
+        elif repo_path != ".":
+            gs = git_status_info(repo_path)
+            if gs:
+                dirty_text = "[red]*[/]" if gs.dirty else ""
+                git_text = f"  [blue]git:{gs.branch}{dirty_text}[/]"
         bar.update(f" {venv_icon}  {node_text}{git_text}")
 
     def _render_welcome(self) -> None:

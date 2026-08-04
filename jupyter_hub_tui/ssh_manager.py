@@ -88,19 +88,22 @@ class SSHManager:
         # Return the raw SSH command for the embedded terminal to run.
         return self.raw_ssh_command(name)
 
-    def list_remote_dir(self, name: str, path: str = "~") -> list[dict]:
-        # List a directory on a remote node. Returns list of {name, is_dir}.
-        # ponytail: blocking subprocess, ~0.5s per call. Fine for browsing.
+    def _ssh_prefix(self, name: str) -> list[str]:
+        # Build ssh + proxy prefix for remote commands.
         node = self._nodes[name]
         cmd = ["ssh"]
         if node.proxy and node.proxy in self._nodes:
             proxy = self._nodes[node.proxy]
             cmd += ["-J", f"{proxy.user}@{proxy.host}:{proxy.port}"]
-        cmd += [
-            "-p", str(node.port),
+        cmd += ["-p", str(node.port), f"{node.user}@{node.host}"]
+        return cmd
+
+    def list_remote_dir(self, name: str, path: str = "~") -> list[dict]:
+        # List a directory on a remote node. Returns list of {name, is_dir}.
+        # ponytail: blocking subprocess, ~0.5s per call. Fine for browsing.
+        cmd = self._ssh_prefix(name) + [
             "-o", "ConnectTimeout=5",
             "-o", "BatchMode=yes",
-            f"{node.user}@{node.host}",
             f"ls -1F {path} 2>/dev/null",
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -112,6 +115,21 @@ class SSHManager:
             entries.append({"name": line.rstrip("/*"), "is_dir": is_dir})
         entries.sort(key=lambda e: (not e["is_dir"], e["name"]))
         return entries
+
+    def remote_git_status(self, name: str, path: str) -> str | None:
+        # Run git status on remote. Returns porcelain output or None.
+        cmd = self._ssh_prefix(name) + [
+            "-o", "ConnectTimeout=5",
+            "-o", "BatchMode=yes",
+            f"git -C {path} status --porcelain=v1 -b 2>/dev/null",
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return None
+        if result.returncode != 0:
+            return None
+        return result.stdout.strip() or None
 
     def setup_keys_command(self) -> list[str]:
         # Return a shell command that generates a key and copies it to all nodes.

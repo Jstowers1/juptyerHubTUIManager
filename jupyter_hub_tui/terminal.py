@@ -16,6 +16,7 @@ from rich.text import Text
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widget import Widget
+from textual.binding import Binding
 
 
 def key_to_bytes(key: str, char: str | None) -> bytes:
@@ -67,6 +68,11 @@ class TerminalDisplay(Widget):
 
     can_focus = True
 
+    # Capture tab so Screen's focus_next doesn't steal it during SSH.
+    BINDINGS = [
+        Binding("tab", "send_tab", show=False),
+    ]
+
     DEFAULT_CSS = """
     TerminalDisplay {
         background: #1d1f21;
@@ -104,6 +110,14 @@ class TerminalDisplay(Widget):
             self.send_key(event.key, event.character)
             event.prevent_default()
             event.stop()
+
+    def action_send_tab(self) -> None:
+        # Send tab to PTY instead of letting focus_next steal it.
+        if self._pty_running and self._master_fd is not None:
+            try:
+                os.write(self._master_fd, b"\t")
+            except OSError:
+                pass
 
     def start(self, command: list[str]) -> None:
         self._pty_running = True
