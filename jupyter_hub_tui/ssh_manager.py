@@ -11,11 +11,6 @@ from typing import Any
 from . import config as cfg
 
 
-def _control_path(name: str) -> str:
-    # Per-node socket path so each node gets its own master.
-    return f"/tmp/tui-ssh-{name}-%C"
-
-
 @dataclass
 class Node:
     name: str
@@ -60,15 +55,11 @@ class SSHManager:
         return node
 
     def raw_ssh_command(self, name: str) -> list[str]:
-        # Plain ssh for embedded terminal. ssh-agent started by jhtui
-        # launcher handles passphrase (one per session).
         node = self._nodes[name]
         cmd = [
             "ssh", "-tt",
-            "-o", "ControlMaster=auto",
-            "-o", f"ControlPath={_control_path(name)}",
-            "-o", "ControlPersist=no",
-            f"{node.user}@{node.host}", "-p", str(node.port),
+            "-p", str(node.port),
+            f"{node.user}@{node.host}",
         ]
         if node.proxy and node.proxy in self._nodes:
             proxy = self._nodes[node.proxy]
@@ -101,16 +92,12 @@ class SSHManager:
         return self.raw_ssh_command(name)
 
     def _ssh_prefix(self, name: str) -> list[str]:
-        # Build ssh + proxy prefix for remote commands.
-        # Uses same ControlPath as raw_ssh_command so commands reuse
-        # the interactive SSH session without re-authenticating.
         node = self._nodes[name]
         cmd = ["ssh"]
         if node.proxy and node.proxy in self._nodes:
             proxy = self._nodes[node.proxy]
             cmd += ["-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}"]
         cmd += [
-            "-o", f"ControlPath={_control_path(name)}",
             "-o", "ConnectTimeout=5",
             "-o", "BatchMode=yes",
             "-p", str(node.port), f"{node.user}@{node.host}",
@@ -118,19 +105,7 @@ class SSHManager:
         return cmd
 
     def check_master(self, name: str) -> bool:
-        node = self._nodes[name]
-        cmd = [
-            "ssh",
-            "-o", f"ControlPath={_control_path(name)}",
-            "-O", "check",
-            "-p", str(node.port),
-            f"{node.user}@{node.host}",
-        ]
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            return False
-        return result.returncode == 0
+        return self.list_remote_dir(name, "~") != []
 
     def list_remote_dir(self, name: str, path: str = "~") -> list[dict]:
         cmd = self._ssh_prefix(name) + [
@@ -226,15 +201,13 @@ class SSHManager:
         return result.returncode == 0
 
     def scp_file(self, name: str, remote_path: str, local_path: str) -> bool:
-        # Download a file from remote to local via scp.
         node = self._nodes[name]
         scp_args = ["scp"]
         if node.proxy and node.proxy in self._nodes:
             proxy = self._nodes[node.proxy]
             scp_args += ["-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}"]
         scp_args += [
-            "-o", f"ControlPath={_control_path(name)}",
-            "-o", "ConnectTimeout=5",
+            "-o", "ConnectTimeout=10",
             "-o", "BatchMode=yes",
             "-P", str(node.port),
             f"{node.user}@{node.host}:{remote_path}",
@@ -247,15 +220,13 @@ class SSHManager:
         return result.returncode == 0
 
     def scp_upload(self, name: str, local_path: str, remote_path: str) -> bool:
-        # Upload a file from local to remote via scp.
         node = self._nodes[name]
         scp_args = ["scp"]
         if node.proxy and node.proxy in self._nodes:
             proxy = self._nodes[node.proxy]
             scp_args += ["-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}"]
         scp_args += [
-            "-o", f"ControlPath={_control_path(name)}",
-            "-o", "ConnectTimeout=5",
+            "-o", "ConnectTimeout=10",
             "-o", "BatchMode=yes",
             "-P", str(node.port),
             local_path,
@@ -318,9 +289,7 @@ def _self_check() -> None:
     raw = mgr.raw_ssh_command("worker-1")
     assert raw[0] == "ssh", f"raw should start with ssh: {raw}"
     assert "ProxyJump" in " ".join(raw), "ProxyJump missing from raw"
-    assert "ControlMaster" in " ".join(raw), "ControlMaster missing"
-    assert "tui-ssh-worker-1" in " ".join(raw), "per-node ControlPath missing"
-    assert "ControlPersist=no" in " ".join(raw), "ControlPersist should be no"
+    assert "ControlMaster" not in " ".join(raw), "ControlMaster should be gone"
     assert hasattr(mgr, "scp_file"), "scp_file missing"
     assert hasattr(mgr, "scp_upload"), "scp_upload missing"
     assert not hasattr(mgr, "setup_keys"), "blocking setup_keys should be deleted"

@@ -127,6 +127,10 @@ class FocusableStatic(Static):
 class FocusableLog(RichLog):
     can_focus = True
 
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("markup", True)
+        super().__init__(*args, **kwargs)
+
 
 class JupyterHubTUI(App):
 
