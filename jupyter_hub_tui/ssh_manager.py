@@ -26,6 +26,7 @@ class SSHManager:
     # Wraps ssh subprocess management. Does not hold persistent connections.
 
     def __init__(self, data: dict[str, Any]):
+        self._data = data
         self._nodes: dict[str, Node] = {}
         for name, info in cfg.nodes(data).items():
             self._nodes[name] = Node(
@@ -56,8 +57,12 @@ class SSHManager:
 
     def raw_ssh_command(self, name: str) -> list[str]:
         node = self._nodes[name]
+        cp = self._control_path(name)
         cmd = [
             "ssh", "-tt",
+            "-o", f"ControlMaster=auto",
+            "-o", f"ControlPath={cp}",
+            "-o", "ControlPersist=120",
             "-p", str(node.port),
             f"{node.user}@{node.host}",
         ]
@@ -91,9 +96,36 @@ class SSHManager:
         # Return the raw SSH command for the embedded terminal to run.
         return self.raw_ssh_command(name)
 
+    def raw_ssh_command_for_notebook(self, name: str, notebook_path: str) -> list[str]:
+        node = self._nodes[name]
+        cp = self._control_path(name)
+        venv_cmd = cfg.venv_activate_cmd(self._data)
+        remote_cmd = f"{venv_cmd} && euporie notebook {shlex.quote(notebook_path)}" if venv_cmd else f"euporie notebook {shlex.quote(notebook_path)}"
+        cmd = [
+            "ssh", "-tt",
+            "-o", f"ControlMaster=auto",
+            "-o", f"ControlPath={cp}",
+            "-o", "ControlPersist=120",
+            "-p", str(node.port),
+            f"{node.user}@{node.host}",
+        ]
+        if node.proxy and node.proxy in self._nodes:
+            proxy = self._nodes[node.proxy]
+            cmd += ["-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}"]
+        cmd += [remote_cmd]
+        return cmd
+
+    def _control_path(self, name: str) -> str:
+        return f"/tmp/jhtui-ssh-{name}"
+
     def _ssh_prefix(self, name: str) -> list[str]:
         node = self._nodes[name]
-        cmd = ["ssh"]
+        cp = self._control_path(name)
+        cmd = ["ssh",
+            "-o", f"ControlMaster=auto",
+            "-o", f"ControlPath={cp}",
+            "-o", "ControlPersist=120",
+        ]
         if node.proxy and node.proxy in self._nodes:
             proxy = self._nodes[node.proxy]
             cmd += ["-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}"]
@@ -300,9 +332,11 @@ def _self_check() -> None:
     raw = mgr.raw_ssh_command("worker-1")
     assert raw[0] == "ssh", f"raw should start with ssh: {raw}"
     assert "ProxyJump" in " ".join(raw), "ProxyJump missing from raw"
-    assert "ControlMaster" not in " ".join(raw), "ControlMaster should be gone"
+    assert "ControlMaster" in " ".join(raw), "ControlMaster missing from raw"
+    assert "ControlPersist" in " ".join(raw), "ControlPersist missing from raw"
     assert hasattr(mgr, "scp_file"), "scp_file missing"
     assert hasattr(mgr, "scp_upload"), "scp_upload missing"
+    assert hasattr(mgr, "raw_ssh_command_for_notebook"), "notebook command missing"
     assert not hasattr(mgr, "setup_keys"), "blocking setup_keys should be deleted"
     print("SSH self-check passed")
 

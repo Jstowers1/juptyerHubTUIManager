@@ -211,8 +211,23 @@ class JupyterHubTUI(App):
         hp.write("    Enter      Checkout branch")
         hp.write("")
         hp.write("[cyan]Notebooks[/]")
-        hp.write("  Enter        Open .ipynb (downloads, opens in new tab)")
+        hp.write("  Enter        Open .ipynb in new tab (remote euporie)")
         hp.write("  Ctrl+W       Close current notebook tab")
+        hp.write("")
+        hp.write("[cyan]Euporie[/]")
+        hp.write("  Ctrl+E       Edit mode (write code)")
+        hp.write("  Esc          Command mode")
+        hp.write("  Shift+Enter  Run cell, select next")
+        hp.write("  Ctrl+Enter   Run cell in place")
+        hp.write("  Alt+Enter    Run cell, insert below")
+        hp.write("  Ctrl+S       Save notebook")
+        hp.write("  In cmd mode:")
+        hp.write("    a          Insert cell above")
+        hp.write("    b          Insert cell below")
+        hp.write("    dd         Delete cell")
+        hp.write("    m          Cell type: markdown")
+        hp.write("    y          Cell type: code")
+        hp.write("    k/j        Select up/down")
         hp.write("")
         hp.write("[cyan]Config[/]")
         hp.write("  Ctrl+E       Edit active node")
@@ -377,26 +392,10 @@ class JupyterHubTUI(App):
             return
         term = self._active_term()
         term.stop()
-        # Upload notebook changes back to remote.
-        meta = self._nb_meta.pop(active, None)
-        if meta and meta.get("node"):
-            self.notify(f"Uploading changes to {meta['remote']}...")
-            self.run_worker(
-                self._sync_notebook(meta["node"], meta["local"], meta["remote"]),
-                exclusive=True)
+        self._nb_meta.pop(active, None)
         tabs.remove_pane(active)
         tabs.active = "terminal-tab"
         self._term.focus()
-
-    async def _sync_notebook(self, node: str, local: str, remote: str) -> None:
-        import asyncio
-        loop = asyncio.get_event_loop()
-        ok = await loop.run_in_executor(
-            None, self._ssh.scp_upload, node, local, remote)
-        if ok:
-            self.notify("Notebook synced to remote.")
-        else:
-            self.notify("Failed to sync notebook.", severity="error")
 
     def action_cycle_focus(self) -> None:
         # Tab: Dashboard cycles left panel <-> content.
@@ -569,32 +568,20 @@ class JupyterHubTUI(App):
             exclusive=True)
 
     async def _open_notebook_worker(self, node_name: str, notebook_path: str) -> None:
-        import asyncio, os
-        loop = asyncio.get_event_loop()
-        os.makedirs("/tmp/jhtui-nb", exist_ok=True)
-        basename = notebook_path.rsplit("/", 1)[-1]
+        cmd = self._ssh.raw_ssh_command_for_notebook(node_name, notebook_path)
         self._nb_counter += 1
-        local_path = f"/tmp/jhtui-nb/{self._nb_counter}-{basename}"
-        ok = await loop.run_in_executor(
-            None, self._ssh.scp_file, node_name, notebook_path, local_path)
-        if not ok:
-            self.notify("Failed to download notebook.", severity="error")
-            return
-        venv_euporie = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)),
-            ".venv", "bin", "euporie")
-        euporie_bin = venv_euporie if os.path.exists(venv_euporie) else "euporie"
-        cmd = [euporie_bin, "notebook", local_path]
-        self._add_notebook_tab(basename, local_path, notebook_path, cmd)
+        basename = notebook_path.rsplit("/", 1)[-1]
+        self._add_notebook_tab(basename, notebook_path, cmd)
 
-    def _add_notebook_tab(self, title: str, local_path: str, remote_path: str, cmd: list[str]) -> None:
+    def _add_notebook_tab(self, title: str, remote_path: str, cmd: list[str]) -> None:
         tab_id = f"nb-tab-{self._nb_counter}"
         tabs = self.query_one("#term-tabs", TabbedContent)
         term = TerminalDisplay()
+        term.notebook_mode = True
         pane = TabPane(title, term, id=tab_id)
         tabs.add_pane(pane)
         self._nb_meta[tab_id] = {
-            "local": local_path, "remote": remote_path,
+            "remote": remote_path,
             "node": self._ssh.active.name if self._ssh.active else None,
         }
         tabs.active = tab_id

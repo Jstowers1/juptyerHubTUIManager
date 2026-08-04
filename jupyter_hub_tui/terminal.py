@@ -83,6 +83,12 @@ ESCAPE_HATCH_KEYS = {
     "ctrl+backslash": "toggle_sidebar",
 }
 
+# Subset for notebook tabs. Everything else passes to euporie.
+NOTEBOOK_HATCH_KEYS = {
+    "ctrl+w": "close_tab",
+    "ctrl+backslash": "toggle_sidebar",
+}
+
 
 class TerminalDisplay(Widget):
 
@@ -120,17 +126,16 @@ class TerminalDisplay(Widget):
         self._pending_start = False
         self._connected = False
         self._overlay_done = False
+        self.notebook_mode = False
 
     @property
     def pty_active(self) -> bool:
         return self._pty_running
 
     def on_key(self, event) -> None:
-        # During SSH, intercept escape-hatch keys and route to app actions.
-        # All other keys go to the PTY. This bypasses Textual's binding
-        # dispatch entirely, which is unreliable under kitty keyboard protocol.
         if self._pty_running and self._master_fd is not None:
-            action = ESCAPE_HATCH_KEYS.get(event.key)
+            hatches = NOTEBOOK_HATCH_KEYS if self.notebook_mode else ESCAPE_HATCH_KEYS
+            action = hatches.get(event.key)
             if action:
                 event.prevent_default()
                 event.stop()
@@ -140,8 +145,6 @@ class TerminalDisplay(Widget):
             event.prevent_default()
             event.stop()
         elif self._pending_start:
-            # Eat all keys while waiting for PTY fork so digits
-            # don't trigger quick_connect during passphrase entry.
             event.prevent_default()
             event.stop()
 
