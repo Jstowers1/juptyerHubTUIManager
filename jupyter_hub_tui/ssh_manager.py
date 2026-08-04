@@ -79,7 +79,7 @@ class SSHManager:
         # connections all reuse the agent, no triple-prompt.
         script = (
             f"eval $(ssh-agent -s) >/dev/null 2>&1; "
-            "ssh-add ~/.ssh/id_ed25519 2>/dev/null || true; "
+            "ssh-add ~/.ssh/id_ed25519; "
             f"trap 'kill $SSH_AGENT_PID' EXIT; "
             f"{ssh_str}"
         )
@@ -242,6 +242,27 @@ class SSHManager:
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return False
         return "yes" in result.stdout
+
+    def scp_file(self, name: str, remote_path: str, local_path: str) -> bool:
+        # Download a file from remote to local via scp.
+        node = self._nodes[name]
+        scp_args = ["scp"]
+        if node.proxy and node.proxy in self._nodes:
+            proxy = self._nodes[node.proxy]
+            scp_args += ["-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}"]
+        scp_args += [
+            "-o", f"ControlPath={_control_path(name)}",
+            "-o", "ConnectTimeout=5",
+            "-o", "BatchMode=yes",
+            "-P", str(node.port),
+            f"{node.user}@{node.host}:{remote_path}",
+            local_path,
+        ]
+        try:
+            result = subprocess.run(scp_args, capture_output=True, text=True, timeout=15)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False
+        return result.returncode == 0
 
     def run_in_term(self, name: str, remote_cmd: str) -> list[str]:
         # Return raw ssh command with a remote command to run in PTY.

@@ -10,6 +10,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Header, Static, ListView, ListItem, Label
 from textual.widgets import Input, Button, Tree, RichLog
+from textual.widgets import TabbedContent, TabPane
 
 from . import config as cfg
 from . import venv
@@ -43,7 +44,7 @@ Screen {
 #right-panel {
     width: 3fr;
     border: solid $primary;
-    padding: 0 1;
+    padding: 0;
 }
 
 #right-panel:focus-within {
@@ -55,9 +56,12 @@ Screen {
     padding: 1 2;
 }
 
-#term-display {
+#term-tabs {
     height: 1fr;
-    display: none;
+}
+
+#term-tabs TerminalDisplay {
+    height: 1fr;
     background: #1d1f21;
 }
 
@@ -132,9 +136,8 @@ class JupyterHubTUI(App):
         Binding("ctrl+g", "git_picker", "Git Repo"),
         Binding("ctrl+b", "git_branch", "Git Branch"),
         Binding("ctrl+backslash", "toggle_sidebar", "Sidebar", priority=True),
-        # Ctrl+T: non-priority app binding handles sidebar->terminal.
-        # Terminal escape hatch handles terminal->sidebar.
         Binding("ctrl+t", "toggle_term_focus", "Focus"),
+        Binding("ctrl+w", "close_tab", "Close Tab"),
         Binding("escape", "quit"),
         Binding("tab", "cycle_focus", show=False),
         Binding("1", "quick_connect(0)", show=False),
@@ -159,7 +162,9 @@ class JupyterHubTUI(App):
                 yield Tree("root", id="file-tree")
             with Vertical(id="right-panel"):
                 yield FocusableStatic("", id="content-area")
-                yield TerminalDisplay(id="term-display")
+                with TabbedContent(id="term-tabs"):
+                    with TabPane("Terminal", id="terminal-tab"):
+                        yield TerminalDisplay(id="term-display")
         yield Footer()
         yield Static("", id="status-bar")
 
@@ -170,6 +175,9 @@ class JupyterHubTUI(App):
         self._populate_file_tree()
         self._node_names = list(self._ssh.nodes.keys())
         self._populate_help()
+        self._nb_counter = 0
+        # Hide tabs until SSH starts.
+        self.query_one("#term-tabs").display = False
 
     def _populate_help(self) -> None:
         hp = self.query_one("#help-panel", FocusableLog)
@@ -196,7 +204,8 @@ class JupyterHubTUI(App):
         hp.write("    Enter      Checkout branch")
         hp.write("")
         hp.write("[cyan]Notebooks[/]")
-        hp.write("  Enter        Open .ipynb in euporie (file tree)")
+        hp.write("  Enter        Open .ipynb (downloads, opens in new tab)")
+        hp.write("  Ctrl+W       Close current notebook tab")
         hp.write("")
         hp.write("[cyan]Config[/]")
         hp.write("  Ctrl+E       Edit active node")
@@ -224,15 +233,13 @@ class JupyterHubTUI(App):
         cmd_display = self.query_one("#ssh-command-display", Label)
         cmd_display.update(f"[dim]$ {self._ssh.command_str(name)}[/]")
         self._content.display = False
+        self.query_one("#term-tabs").display = True
         term = self._term
         term.stop()
         term.reset()
-        term.display = True
         cmd = self._ssh.launch(name)
         term.start(cmd)
         term.focus()
-        # Run blocking SSH commands in a worker thread so they
-        # don't freeze the event loop during password entry.
         self.run_worker(self._bg_update_after_connect(), exclusive=True)
 
     async def _bg_update_after_connect(self) -> None:
@@ -299,9 +306,10 @@ class JupyterHubTUI(App):
         bar.update(f" {venv_icon}  {node_text}{git_text}")
 
     def on_terminal_display_exited(self, event: TerminalDisplay.Exited) -> None:
+        if event.terminal_display.id != "term-display":
+            return
         self._ssh._active = None
-        term = self._term
-        term.display = False
+        self.query_one("#term-tabs").display = False
         self._content.display = True
         self._content.update("[yellow]SSH session ended.[/]")
         self._content.focus()
@@ -317,17 +325,40 @@ class JupyterHubTUI(App):
     def action_toggle_sidebar(self) -> None:
         left = self.query_one("#left-panel")
         left.display = not left.display
-        self._term._resize_pty()
+        self._active_term()._resize_pty()
+
+    def _active_term(self) -> TerminalDisplay:
+        # Return the TerminalDisplay in the currently active tab.
+        tabs = self.query_one("#term-tabs", TabbedContent)
+        if not tabs.active:
+            return self._term
+        try:
+            pane = tabs.get_pane(tabs.active)
+            return pane.query_one(TerminalDisplay)
+        except Exception:
+            return self._term
 
     def action_toggle_term_focus(self) -> None:
-        # Ctrl+T during SSH: toggle between terminal and sidebar.
-        # Disable terminal focus so Tab can't return to it.
-        if self.focused is self._term:
-            self._term.can_focus = False
+        # Ctrl+T: toggle between active tab's terminal and sidebar.
+        term = self._active_term()
+        if self.focused is term:
+            term.can_focus = False
             self.query_one("#file-tree", Tree).focus()
         else:
-            self._term.can_focus = True
-            self._term.focus()
+            term.can_focus = True
+            term.focus()
+
+    def action_close_tab(self) -> None:
+        tabs = self.query_one("#term-tabs", TabbedContent)
+        active = tabs.active
+        if not active or active == "terminal-tab":
+            self.notify("Can't close terminal tab.", severity="warning")
+            return
+        term = self._active_term()
+        term.stop()
+        tabs.remove_pane(active)
+        tabs.active = "terminal-tab"
+        self._term.focus()
 
     def action_cycle_focus(self) -> None:
         # Tab: Dashboard cycles left panel <-> content.
@@ -344,7 +375,7 @@ class JupyterHubTUI(App):
     def action_show_help(self) -> None:
         help_panel = self.query_one("#help-panel")
         help_panel.display = not help_panel.display
-        self._term._resize_pty()
+        self._active_term()._resize_pty()
 
     def action_git_picker(self) -> None:
         if not self._ssh.active:
@@ -507,11 +538,41 @@ class JupyterHubTUI(App):
         if not self._term.pty_active:
             self.notify("No active SSH session.", severity="warning")
             return
-        remote_venv = cfg.remote_venv_path(self._data) or "~/.venv"
-        cmd = f"source {remote_venv}/bin/activate 2>/dev/null; euporie notebook {notebook_path}\n"
-        self._term.send_input(cmd)
-        self._term.focus()
-        self.notify(f"Opening {notebook_path}")
+        self.notify(f"Downloading {notebook_path}...")
+        self.run_worker(
+            self._open_notebook_worker(node_name, notebook_path),
+            exclusive=True)
+
+    async def _open_notebook_worker(self, node_name: str, notebook_path: str) -> None:
+        import asyncio, tempfile, os
+        loop = asyncio.get_event_loop()
+        os.makedirs("/tmp/jhtui-nb", exist_ok=True)
+        basename = notebook_path.rsplit("/", 1)[-1]
+        local_path = f"/tmp/jhtui-nb/{basename}"
+        ok = await loop.run_in_executor(
+            None, self._ssh.scp_file, node_name, notebook_path, local_path)
+        if not ok:
+            self.notify("Failed to download notebook.", severity="error")
+            return
+        # Find euporie in venv.
+        venv_euporie = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            ".venv", "bin", "euporie")
+        euporie_bin = venv_euporie if os.path.exists(venv_euporie) else "euporie"
+        cmd = [euporie_bin, "notebook", local_path]
+        self._add_notebook_tab(basename, local_path, cmd)
+
+    def _add_notebook_tab(self, title: str, local_path: str, cmd: list[str]) -> None:
+        self._nb_counter += 1
+        tab_id = f"nb-tab-{self._nb_counter}"
+        tabs = self.query_one("#term-tabs", TabbedContent)
+        term = TerminalDisplay()
+        pane = TabPane(title, term, id=tab_id)
+        tabs.add_pane(pane)
+        tabs.active = tab_id
+        term.start(cmd)
+        term.focus()
+        self.notify(f"Opened {title}")
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if hasattr(event.list_view, "id") and event.list_view.id == "node-list":
@@ -669,16 +730,16 @@ class GitPickerScreen(ModalScreen):
         self._data = data
         self._ssh = ssh
         self._on_save = on_save
-        self._current = "~"
+        self._root = "~"
         self._node = ssh.active.name if ssh.active else None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="git-dialog"):
             yield Label("Pick Git Repo Path (Remote)", id="edit-title")
-            yield Label(self._current, id="current-path")
-            tree = Tree(self._current, id="dir-tree")
+            yield Label(self._root, id="current-path")
+            tree = Tree(self._root, id="dir-tree")
             yield tree
-            yield Input(value=self._current, id="git-path-input")
+            yield Input(value=self._root, id="git-path-input")
             with Horizontal():
                 yield Button("Save", id="git-save", variant="success")
                 yield Button("Cancel", id="git-cancel", variant="error")
@@ -686,15 +747,28 @@ class GitPickerScreen(ModalScreen):
     def on_mount(self) -> None:
         self._populate_tree()
 
+    def _node_path(self, node) -> str:
+        # Compute full remote path from root + tree labels.
+        tree = self.query_one("#dir-tree", Tree)
+        labels = []
+        cur = node
+        while cur is not None and cur is not tree.root:
+            labels.append(str(cur.label))
+            cur = cur.parent
+        labels.reverse()
+        if labels:
+            return self._root + "/" + "/".join(labels)
+        return self._root
+
     def _populate_tree(self) -> None:
         tree = self.query_one("#dir-tree", Tree)
         tree.clear()
-        tree.root.set_label(self._current)
+        tree.root.set_label(self._root)
         if not self._node:
             tree.root.add_leaf("[red]No active SSH connection[/]")
             return
         try:
-            entries = self._ssh.list_remote_dir(self._node, self._current)
+            entries = self._ssh.list_remote_dir(self._node, self._root)
         except Exception:
             tree.root.add_leaf("[red]SSH connection failed[/]")
             return
@@ -706,14 +780,7 @@ class GitPickerScreen(ModalScreen):
     def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
         if event.node is self.query_one("#dir-tree", Tree).root:
             return
-        tree = self.query_one("#dir-tree", Tree)
-        labels = []
-        cur = event.node
-        while cur is not None and cur is not tree.root:
-            labels.append(str(cur.label))
-            cur = cur.parent
-        labels.reverse()
-        full_path = self._current + "/" + "/".join(labels)
+        full_path = self._node_path(event.node)
         try:
             entries = self._ssh.list_remote_dir(self._node, full_path)
         except Exception:
@@ -726,15 +793,9 @@ class GitPickerScreen(ModalScreen):
         tree = self.query_one("#dir-tree", Tree)
         if event.node is tree.root:
             return
-        labels = []
-        cur = event.node
-        while cur is not None and cur is not tree.root:
-            labels.append(str(cur.label))
-            cur = cur.parent
-        labels.reverse()
-        self._current = self._current + "/" + "/".join(labels)
-        self.query_one("#current-path", Label).update(self._current)
-        self.query_one("#git-path-input", Input).value = self._current
+        full_path = self._node_path(event.node)
+        self.query_one("#current-path", Label).update(full_path)
+        self.query_one("#git-path-input", Input).value = full_path
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "git-cancel":

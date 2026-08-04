@@ -78,6 +78,7 @@ ESCAPE_HATCH_KEYS = {
     "ctrl+h": "show_help",
     "ctrl+g": "git_picker",
     "ctrl+b": "git_branch",
+    "ctrl+w": "close_tab",
     "ctrl+backslash": "toggle_sidebar",
 }
 
@@ -99,8 +100,9 @@ class TerminalDisplay(Widget):
     """
 
     class Exited(Message):
-        def __init__(self, exit_code: int) -> None:
+        def __init__(self, exit_code: int, terminal_display: "TerminalDisplay") -> None:
             self.exit_code = exit_code
+            self.terminal_display = terminal_display
             super().__init__()
 
     _lines: reactive[list[str]] = reactive(list)
@@ -116,6 +118,7 @@ class TerminalDisplay(Widget):
         self._command: list[str] = []
         self._pending_start = False
         self._connected = False
+        self._overlay_done = False
 
     @property
     def pty_active(self) -> bool:
@@ -145,6 +148,7 @@ class TerminalDisplay(Widget):
         self._command = command
         self._pending_start = True
         self._connected = False
+        self._overlay_done = False
         # Focusable immediately so digits/keys go to PTY, not app bindings.
         self.can_focus = True
         self._try_start()
@@ -237,6 +241,9 @@ class TerminalDisplay(Widget):
                 self._handle_exit()
                 return
             self._connected = True
+            if not self._overlay_done:
+                self._overlay_done = True
+                self._refresh_display()
             self._stream.feed(data.decode("utf-8", errors="replace"))
             self._refresh_display()
         if self._pid is not None:
@@ -260,14 +267,14 @@ class TerminalDisplay(Widget):
                 pass
             self._master_fd = None
         self._pid = None
-        self.post_message(self.Exited(status))
+        self.post_message(self.Exited(status, self))
 
     def _refresh_display(self) -> None:
         self._lines = [line.rstrip() for line in self._screen.display]
         self.refresh()
 
     def render(self) -> Text:
-        if not self._connected:
+        if not self._overlay_done:
             return Text("Connecting...", style="yellow on #1d1f21")
         if not self._lines:
             return Text(" ", style="white on #1d1f21")
@@ -292,6 +299,7 @@ class TerminalDisplay(Widget):
         self._pty_running = False
         self._pending_start = False
         self._connected = False
+        self._overlay_done = False
         self.can_focus = False
         self._stop_timer()
         if self._pid is not None:
