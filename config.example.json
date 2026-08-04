@@ -1,0 +1,32 @@
+{
+  "nodes": {
+    "pub": {
+      "host": "pub.example.edu",
+      "user": "username",
+      "port": 22,
+      "description": "General purpose login node"
+    },
+    "cobalt": {
+      "host": "cobalt.example.edu",
+      "user": "username",
+      "port": 22,
+      "description": "IceTop tools access",
+      "proxy": "pub"
+    },
+    "npx-submitter": {
+      "host": "npx-submitter.example.edu",
+      "user": "username",
+      "port": 22,
+      "description": "HTC job submission",
+      "proxy": "pub"
+    }
+  },
+  "venv": {
+    "path": "~/.venv/icetop",
+    "activate_script": "bin/activate"
+  },
+  "jupyter": {
+    "port": 8888,
+    "directory": "~/notebooks"
+  }
+}
