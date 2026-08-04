@@ -16,9 +16,8 @@ Replaces JupyterHub dependency for SSH, git, venv, and notebook workflows.
 
 | Key | Action |
 |-----|--------|
-| `1`-`9` | Connect to node by index |
-| `Tab` | Focus nodes panel |
-| `Shift+Tab` | Focus terminal/content |
+| `1`-`9` | Connect to node by index (dashboard only) |
+| `Tab` | Toggle focus between panels |
 | `Ctrl+N` | Disconnect and return to dashboard |
 | `Ctrl+E` | Edit active node details (host, user, port, proxy) |
 | `Ctrl+M` | View cluster manual |

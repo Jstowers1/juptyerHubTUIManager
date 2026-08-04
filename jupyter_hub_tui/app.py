@@ -101,8 +101,7 @@ class JupyterHubTUI(App):
     TITLE = "Jupyter Hub TUI"
     CSS = CSS
 
-    # priority=True fires before any focused widget can swallow the key.
-    # digit keys: quick-connect to nodes 1-9.
+    # priority=True only for escape hatches that must fire during SSH.
     BINDINGS = [
         Binding("escape", "quit", "Quit", priority=True),
         Binding("ctrl+r", "refresh", "Refresh", priority=True),
@@ -111,11 +110,6 @@ class JupyterHubTUI(App):
         Binding("ctrl+j", "launch_jupyter", "Jupyter", priority=True),
         Binding("ctrl+k", "setup_keys", "SSH Keys", priority=True),
         Binding("ctrl+e", "edit_node", "Edit Node", priority=True),
-        Binding("tab", "focus_left", "Nodes", priority=True),
-        Binding("shift+tab", "focus_terminal", "Terminal", priority=True),
-        Binding("1", "connect_node('pub')", show=False, priority=True),
-        Binding("2", "connect_node('cobalt')", show=False, priority=True),
-        Binding("3", "connect_node('npx-submitter')", show=False, priority=True),
     ]
 
     def __init__(self):
@@ -149,15 +143,44 @@ class JupyterHubTUI(App):
     def _term(self) -> TerminalDisplay:
         return self.query_one("#term-display", TerminalDisplay)
 
-    # Keys that bypass the terminal even during SSH sessions.
-    _ESCAPE_KEYS = frozenset({"ctrl+n"})
+    # Keys that bypass the terminal during SSH sessions.
+    _ESCAPE_KEYS = frozenset({
+        "ctrl+n", "ctrl+r", "ctrl+m", "ctrl+j",
+        "ctrl+k", "ctrl+e", "escape",
+    })
 
     def on_key(self, event) -> None:
-        # Forward keys to terminal when running, except escape hatches.
-        if self._term.is_running and event.key not in self._ESCAPE_KEYS:
+        # SSH running: forward everything except escape hatches.
+        if self._term.is_running:
+            if event.key in self._ESCAPE_KEYS:
+                return
             self._term.send_key(event.key, event.character)
             event.prevent_default()
             event.stop()
+            return
+        # Dashboard: tab cycles focus between panels.
+        if event.key == "tab":
+            self._cycle_focus()
+            event.prevent_default()
+            event.stop()
+            return
+        # Digit keys quick-connect to nodes by index.
+        if event.character and event.character.isdigit():
+            idx = int(event.character) - 1
+            if 0 <= idx < len(self._node_names):
+                self._start_ssh(self._node_names[idx])
+                event.prevent_default()
+                event.stop()
+
+    def _cycle_focus(self) -> None:
+        # Toggle focus between left panel and right panel.
+        focused = self.focused
+        left = self.query_one("#left-panel")
+        right = self.query_one("#right-panel")
+        if focused is not None and left in focused.ancestors:
+            self.query_one("#content-area", Static).focus()
+        else:
+            self.query_one("#node-list", ListView).focus()
 
     def action_connect_node(self, name: str) -> None:
         self._start_ssh(name)
@@ -198,16 +221,6 @@ class JupyterHubTUI(App):
         content = self.query_one("#content-area", Static)
         content.display = True
         content.focus()
-
-    def action_focus_left(self) -> None:
-        self.query_one("#node-list", ListView).focus()
-
-    def action_focus_terminal(self) -> None:
-        term = self._term
-        if term.display:
-            term.focus()
-        else:
-            self.query_one("#content-area", Static).focus()
 
     def _populate_nodes(self) -> None:
         lv = self.query_one("#node-list", ListView)
