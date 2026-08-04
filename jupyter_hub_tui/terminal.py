@@ -89,23 +89,24 @@ class TerminalDisplay(Widget):
         self._stream = pyte.Stream(self._screen)
         self._master_fd: Optional[int] = None
         self._pid: Optional[int] = None
-        self._running = False
+        self._pty_running = False
         self._poll_timer = None
 
     @property
     def is_running(self) -> bool:
-        return self._running
+        # Override Widget.is_running. Check PTY, not message pump.
+        return self._pty_running
 
     def on_key(self, event) -> None:
-        # Terminal eats all keys when running. Priority bindings
+        # Terminal eats all keys when PTY is running. Priority bindings
         # on the App fire before this handler for escape hatches.
-        if self._running:
+        if self._pty_running:
             self.send_key(event.key, event.character)
             event.prevent_default()
             event.stop()
 
     def start(self, command: list[str]) -> None:
-        self._running = True
+        self._pty_running = True
         self._pid, self._master_fd = pty.fork()
         if self._pid == 0:
             env = os.environ.copy()
@@ -118,7 +119,7 @@ class TerminalDisplay(Widget):
 
     def send_key(self, key: str, char: str | None) -> None:
         data = key_to_bytes(key, char)
-        if data and self._master_fd is not None and self._running:
+        if data and self._master_fd is not None and self._pty_running:
             try:
                 os.write(self._master_fd, data)
             except OSError:
@@ -130,7 +131,7 @@ class TerminalDisplay(Widget):
             self._poll_timer = None
 
     def _poll_pty(self) -> None:
-        if not self._running or self._master_fd is None:
+        if not self._pty_running or self._master_fd is None:
             return
         try:
             ready, _, _ = select.select([self._master_fd], [], [], 0)
@@ -156,9 +157,9 @@ class TerminalDisplay(Widget):
                 self._handle_exit()
 
     def _handle_exit(self, status: int = 0) -> None:
-        if not self._running:
+        if not self._pty_running:
             return
-        self._running = False
+        self._pty_running = False
         self._stop_timer()
         if self._master_fd is not None:
             try:
@@ -179,7 +180,7 @@ class TerminalDisplay(Widget):
         return Text("\n".join(self._lines), style="white on #1d1f21")
 
     def stop(self) -> None:
-        self._running = False
+        self._pty_running = False
         self._stop_timer()
         if self._pid is not None:
             try:

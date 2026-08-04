@@ -92,6 +92,11 @@ class NodeListItem(ListItem):
     pass
 
 
+class FocusableStatic(Static):
+    # Static has can_focus=False. We need it focusable for Tab to work.
+    can_focus = True
+
+
 class JupyterHubTUI(App):
 
     TITLE = "Jupyter Hub TUI"
@@ -130,7 +135,7 @@ class JupyterHubTUI(App):
                 yield Label("Files", classes="section-label")
                 yield Tree("root", id="file-tree")
             with VerticalScroll(id="right-panel"):
-                yield Static("", id="content-area")
+                yield FocusableStatic("", id="content-area")
                 yield TerminalDisplay(id="term-display")
         yield Footer()
         yield Static("", id="status-bar")
@@ -146,6 +151,10 @@ class JupyterHubTUI(App):
     def _term(self) -> TerminalDisplay:
         return self.query_one("#term-display", TerminalDisplay)
 
+    @property
+    def _content(self) -> FocusableStatic:
+        return self.query_one("#content-area", FocusableStatic)
+
     # --- SSH session mode ---
     # Terminal has can_focus=True. When SSH starts, focus moves to the
     # terminal widget. Its on_key eats everything. App priority bindings
@@ -159,7 +168,7 @@ class JupyterHubTUI(App):
         self._update_status()
         cmd_display = self.query_one("#ssh-command-display", Label)
         cmd_display.update(f"[dim]$ {self._ssh.command_str(name)}[/]")
-        self.query_one("#content-area", Static).display = False
+        self._content.display = False
         term = self._term
         term.stop()
         term.reset()
@@ -172,17 +181,15 @@ class JupyterHubTUI(App):
     def on_terminal_display_exited(self, event: TerminalDisplay.Exited) -> None:
         term = self._term
         term.display = False
-        content = self.query_one("#content-area", Static)
-        content.display = True
-        content.update("[yellow]SSH session ended.[/]")
-        content.focus()
+        self._content.display = True
+        self._content.update("[yellow]SSH session ended.[/]")
+        self._content.focus()
 
     def action_new_connection(self) -> None:
         self._term.stop()
         self._term.display = False
-        content = self.query_one("#content-area", Static)
-        content.display = True
-        content.focus()
+        self._content.display = True
+        self._content.focus()
 
     # --- Actions ---
 
@@ -207,11 +214,10 @@ class JupyterHubTUI(App):
     def action_show_help(self) -> None:
         if self._term.is_running:
             return
-        content = self.query_one("#content-area", Static)
-        content.display = True
+        self._content.display = True
         self._term.display = False
-        content.update(self._help_text())
-        content.focus()
+        self._content.update(self._help_text())
+        self._content.focus()
 
     @staticmethod
     def _help_text() -> str:
@@ -264,17 +270,37 @@ class JupyterHubTUI(App):
     def _populate_file_tree(self) -> None:
         tree = self.query_one("#file-tree", Tree)
         tree.clear()
-        repo_path = cfg.git_repo_path(self._data)
-        if repo_path == ".":
-            repo_path = str(Path(__file__).resolve().parent.parent)
-        root = Path(repo_path).expanduser()
-        if not root.is_dir():
-            tree.root.add_leaf("[red]Repo path not found[/]")
-            return
-        self._add_tree_node(tree.root, root, depth=2)
+        tree.root.set_label("Files")
+        active = self._ssh.active
+        if active:
+            # Remote file tree.
+            tree.root.set_label(f"{active.name}:~/")
+            tree.root.data = {"node": active.name, "path": "~"}
+            try:
+                entries = self._ssh.list_remote_dir(active.name, "~")
+            except Exception:
+                tree.root.add_leaf("[red]SSH connection failed[/]")
+                return
+            if not entries:
+                tree.root.add_leaf("[dim](empty)[/]")
+            for e in entries:
+                tree.root.add(e["name"], allow_expand=e["is_dir"])
+            tree.root.expand()
+        else:
+            # Local file tree (fallback when not connected).
+            repo_path = cfg.git_repo_path(self._data)
+            if repo_path == ".":
+                repo_path = str(Path(__file__).resolve().parent.parent)
+            root = Path(repo_path).expanduser()
+            if not root.is_dir():
+                tree.root.add_leaf("[red]Repo path not found[/]")
+                return
+            tree.root.set_label(root.name)
+            tree.root.data = {"local": True, "path": str(root)}
+            self._add_local_tree_node(tree.root, root, depth=1)
+            tree.root.expand()
 
-    def _add_tree_node(self, node: TreeNode, path: Path, depth: int) -> None:
-        # ponytail: fixed depth 2, no lazy loading.
+    def _add_local_tree_node(self, node: TreeNode, path: Path, depth: int) -> None:
         if depth <= 0:
             return
         try:
@@ -286,9 +312,46 @@ class JupyterHubTUI(App):
                 continue
             if entry.is_dir():
                 child = node.add(entry.name, allow_expand=True)
-                self._add_tree_node(child, entry, depth - 1)
+                self._add_local_tree_node(child, entry, depth - 1)
             else:
                 node.add_leaf(entry.name)
+
+    def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
+        node = event.node
+        if node is self.query_one("#file-tree", Tree).root:
+            return
+        root = self.query_one("#file-tree", Tree).root
+        if not root.data:
+            return
+        # Build full path by walking from root to this node.
+        labels = []
+        cur = node
+        while cur is not None and cur is not root:
+            labels.append(str(cur.label))
+            cur = cur.parent
+        labels.reverse()
+        if root.data.get("local"):
+            base = Path(root.data["path"])
+            full = base.joinpath(*labels) if labels else base
+            try:
+                entries = sorted(full.iterdir(), key=lambda p: (not p.is_dir(), p.name))
+            except (PermissionError, NotADirectoryError):
+                return
+            node.allow_expand = False
+            for e in entries:
+                if e.name.startswith("."):
+                    continue
+                node.add(e.name, allow_expand=e["is_dir"])
+        elif root.data.get("node"):
+            node_name = root.data["node"]
+            full_path = root.data["path"] + "/" + "/".join(labels)
+            try:
+                entries = self._ssh.list_remote_dir(node_name, full_path)
+            except Exception:
+                return
+            node.allow_expand = False
+            for e in entries:
+                node.add(e["name"], allow_expand=e["is_dir"])
 
     def _update_status(self) -> None:
         bar = self.query_one("#status-bar", Static)
@@ -316,15 +379,14 @@ class JupyterHubTUI(App):
         bar.update(f" {venv_icon}  {node_text}{git_text}")
 
     def _render_welcome(self) -> None:
-        content = self.query_one("#content-area", Static)
         if self._data.get("_example"):
-            content.update(
+            self._content.update(
                 "[yellow]Using config.example.json.[/]\n"
                 "Copy to config.json and fill in your details.\n\n"
             )
         else:
-            content.update("Select a node to connect, or press 1/2/3.\n\n")
-        content.focus()
+            self._content.update("Select a node to connect, or press 1/2/3.\n\n")
+        self._content.focus()
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if hasattr(event.list_view, "id") and event.list_view.id == "node-list":
@@ -337,11 +399,10 @@ class JupyterHubTUI(App):
 
     def action_show_manual(self) -> None:
         manual_path = Path(__file__).resolve().parent.parent / "docs" / "manual.md"
-        content = self.query_one("#content-area", Static)
         if not manual_path.exists():
-            content.update("[red]Manual not found at docs/manual.md[/]")
+            self._content.update("[red]Manual not found at docs/manual.md[/]")
             return
-        content.update(manual_path.read_text())
+        self._content.update(manual_path.read_text())
 
     def action_launch_jupyter(self) -> None:
         from .jupyter import launch
@@ -357,7 +418,7 @@ class JupyterHubTUI(App):
 
     def action_setup_keys(self) -> None:
         # Run key setup in the embedded terminal.
-        self.query_one("#content-area", Static).display = False
+        self._content.display = False
         term = self._term
         term.stop()
         term.reset()
