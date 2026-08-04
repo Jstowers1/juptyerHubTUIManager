@@ -132,7 +132,9 @@ class JupyterHubTUI(App):
         Binding("ctrl+g", "git_picker", "Git Repo"),
         Binding("ctrl+b", "git_branch", "Git Branch"),
         Binding("ctrl+backslash", "toggle_sidebar", "Sidebar", priority=True),
-        Binding("ctrl+t", "toggle_term_focus", "Focus", priority=True),
+        # Ctrl+T: non-priority app binding handles sidebar->terminal.
+        # Terminal escape hatch handles terminal->sidebar.
+        Binding("ctrl+t", "toggle_term_focus", "Focus"),
         Binding("escape", "quit"),
         Binding("tab", "cycle_focus", show=False),
         Binding("1", "quick_connect(0)", show=False),
@@ -210,9 +212,8 @@ class JupyterHubTUI(App):
         return self.query_one("#content-area", FocusableStatic)
 
     # --- SSH session mode ---
-    # Terminal has can_focus=True. When SSH starts, focus moves to the
-    # terminal widget. Its on_key eats everything. App priority bindings
-    # fire first, so Ctrl+N still escapes.
+    # Terminal can_focus defaults to False. _try_start sets it True
+    # when SSH starts. stop/_handle_exit set it back to False.
 
     def _start_ssh(self, name: str) -> None:
         if name not in self._ssh.nodes:
@@ -245,8 +246,8 @@ class JupyterHubTUI(App):
             None, self._fetch_file_entries, active.name, repo_path)
         status_info = await loop.run_in_executor(
             None, self._fetch_status_info, active.name, repo_path)
-        self.call_from_thread(self._apply_file_tree, file_entries)
-        self.call_from_thread(self._apply_status_bar, status_info)
+        self._apply_file_tree(file_entries)
+        self._apply_status_bar(status_info)
 
     def _fetch_file_entries(self, node_name: str, repo_path: str) -> list[dict]:
         browse = repo_path if repo_path != "." else "~"

@@ -84,7 +84,8 @@ ESCAPE_HATCH_KEYS = {
 
 class TerminalDisplay(Widget):
 
-    can_focus = True
+    # Not focusable by default. Only when SSH starts.
+    can_focus = False
 
     DEFAULT_CSS = """
     TerminalDisplay {
@@ -152,6 +153,7 @@ class TerminalDisplay(Widget):
             return
         self._pending_start = False
         self._pty_running = True
+        self.can_focus = True
         self._screen.resize(h, w)
         self._pid, self._master_fd = pty.fork()
         if self._pid == 0:
@@ -239,6 +241,7 @@ class TerminalDisplay(Widget):
         if not self._pty_running:
             return
         self._pty_running = False
+        self.can_focus = False
         self._stop_timer()
         if self._master_fd is not None:
             try:
@@ -275,6 +278,7 @@ class TerminalDisplay(Widget):
 
     def stop(self) -> None:
         self._pty_running = False
+        self.can_focus = False
         self._stop_timer()
         if self._pid is not None:
             try:

@@ -1,0 +1,5 @@
+#!/bin/bash
+# jhtui: launch jupyter-hub-tui from anywhere
+cd "$(dirname "$0")"
+source .venv/bin/activate
+python -m jupyter_hub_tui "$@"
