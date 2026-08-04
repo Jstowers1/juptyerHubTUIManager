@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from . import config as cfg
@@ -53,6 +54,15 @@ class SSHManager:
         self._active = name
         return node
 
+    def raw_ssh_command(self, name: str) -> list[str]:
+        # Plain ssh without kitty wrapper. For tmux panes.
+        node = self._nodes[name]
+        cmd = ["ssh", f"{node.user}@{node.host}", "-p", str(node.port)]
+        if node.proxy and node.proxy in self._nodes:
+            proxy = self._nodes[node.proxy]
+            cmd += ["-J", f"{proxy.user}@{proxy.host}:{proxy.port}"]
+        return cmd
+
     def command(self, name: str) -> list[str]:
         # Build the ssh command for a node. Uses kitty +kitten ssh when available
         # to copy terminfo and enable graphics over the connection.
@@ -75,9 +85,47 @@ class SSHManager:
         return " ".join(self.command(name))
 
     def launch(self, name: str) -> None:
-        # Spawn SSH in a new kitty window so the user gets an interactive terminal.
-        cmd = self.command(name)
-        subprocess.Popen(["kitty", *cmd])
+        # Split a tmux pane if inside tmux, otherwise spawn a kitty window.
+        if os.environ.get("TMUX"):
+            self._launch_tmux(name)
+        else:
+            cmd = self.command(name)
+            subprocess.Popen(["kitty", *cmd])
+
+    def _launch_tmux(self, name: str) -> None:
+        # Split current tmux window and run SSH in the new pane.
+        cmd = self.raw_ssh_command(name)
+        # ponytail: -h splits right, -p 40 gives SSH 40% of width.
+        subprocess.run(["tmux", "split-window", "-h", "-p", "40", *cmd])
+
+    def setup_keys(self, name: str | None = None) -> list[str]:
+        # Generate an SSH key if none exists, then copy to target nodes.
+        # Returns a list of status messages for display.
+        messages: list[str] = []
+        key_path = Path(os.path.expanduser("~/.ssh/id_ed25519"))
+        if not key_path.exists():
+            subprocess.run(
+                ["ssh-keygen", "-t", "ed25519", "-f", str(key_path), "-N", ""],
+                check=True,
+            )
+            messages.append("Generated ed25519 key.")
+        else:
+            messages.append("Key exists, skipping generation.")
+        targets = [name] if name else list(self._nodes.keys())
+        for n in targets:
+            if n not in self._nodes:
+                continue
+            node = self._nodes[n]
+            result = subprocess.run(
+                ["ssh-copy-id", "-p", str(node.port)]
+                + [f"{node.user}@{node.host}"],
+                capture_output=True, text=True,
+            )
+            if result.returncode == 0:
+                messages.append(f"Key copied to {n}.")
+            else:
+                messages.append(f"Failed on {n}: {result.stderr.strip()}")
+        return messages
 
 
 def _base_ssh_command() -> list[str]:
@@ -114,6 +162,9 @@ def _self_check() -> None:
     assert mgr.active.name == "pub"
     cmd = mgr.command("cobalt")
     assert "-J" in cmd, f"proxy jump missing: {cmd}"
+    raw = mgr.raw_ssh_command("cobalt")
+    assert raw[0] == "ssh", f"raw command should start with ssh: {raw}"
+    assert "-J" in raw, f"proxy jump missing from raw: {raw}"
     print("SSH self-check passed")
 
 

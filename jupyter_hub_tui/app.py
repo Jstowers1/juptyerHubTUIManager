@@ -95,6 +95,7 @@ class JupyterHubTUI(App):
         Binding("m", "show_manual", "Manual"),
         Binding("j", "launch_jupyter", "Jupyter"),
         Binding("e", "edit_node", "Edit Node"),
+        Binding("k", "setup_keys", "SSH Keys"),
     ]
 
     def __init__(self):
@@ -241,6 +242,13 @@ class JupyterHubTUI(App):
         self.notify(f"Launching Jupyter on {self._ssh.active.name}...")
         launch(self._ssh, self._ssh.active.name, port, remote_venv)
         self.notify(f"Jupyter tunneling on localhost:{port}")
+
+    def action_setup_keys(self) -> None:
+        # Generate and copy SSH keys to all configured nodes.
+        self.notify("Setting up SSH keys...")
+        msgs = self._ssh.setup_keys()
+        for msg in msgs:
+            self.notify(msg, timeout=5)
 
     def action_edit_node(self) -> None:
         # Open the edit modal for the active node.
