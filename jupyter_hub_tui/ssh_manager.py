@@ -142,6 +142,51 @@ class SSHManager:
             return None
         return result.stdout.strip() or None
 
+    def remote_git_log(self, name: str, path: str, count: int = 10) -> str:
+        # Return recent commit log from remote.
+        cmd = self._ssh_prefix(name) + [
+            "-o", "ConnectTimeout=5",
+            f"git -C {path} log --oneline -{count} 2>/dev/null",
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return ""
+        return result.stdout.strip()
+
+    def remote_git_fetch(self, name: str, path: str) -> bool:
+        cmd = self._ssh_prefix(name) + [
+            "-o", "ConnectTimeout=10",
+            f"git -C {path} fetch 2>&1",
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False
+        return result.returncode == 0
+
+    def remote_git_pull(self, name: str, path: str) -> tuple[bool, str]:
+        cmd = self._ssh_prefix(name) + [
+            "-o", "ConnectTimeout=10",
+            f"git -C {path} pull 2>&1",
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False, "timeout"
+        return result.returncode == 0, result.stdout.strip()
+
+    def remote_git_diff(self, name: str, path: str) -> str:
+        cmd = self._ssh_prefix(name) + [
+            "-o", "ConnectTimeout=5",
+            f"git -C {path} diff 2>/dev/null",
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return ""
+        return result.stdout.strip()
+
     def remote_git_branches(self, name: str, path: str) -> list[str]:
         # List branches on remote. Returns [branch_name, ...].
         cmd = self._ssh_prefix(name) + [

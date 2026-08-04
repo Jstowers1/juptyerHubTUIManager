@@ -100,23 +100,20 @@ class JupyterHubTUI(App):
     TITLE = "Jupyter Hub TUI"
     CSS = CSS
 
-    # Ctrl combos are priority so they fire during SSH. Digits and tab
-    # are NOT priority: priority bindings fire before the terminal
-    # sees the key, which eats password characters. Non-priority
-    # bindings only fire when no widget consumed the key, and the
-    # terminal's own on_key stops the event during SSH.
+    # Terminal.on_key intercepts escape hatches during SSH and calls
+    # actions directly. These bindings handle dashboard mode only.
+    # Ctrl+\ toggles sidebar and works as a terminal escape hatch too.
     BINDINGS = [
-        Binding("ctrl+r", "refresh", "Refresh", priority=True),
-        Binding("ctrl+n", "new_connection", "Dashboard", priority=True),
-        Binding("ctrl+m", "show_manual", "Manual", priority=True),
-        Binding("ctrl+j", "launch_jupyter", "Jupyter", priority=True),
-        Binding("ctrl+k", "setup_keys", "SSH Keys", priority=True),
-        Binding("ctrl+e", "edit_node", "Edit Node", priority=True),
-        Binding("ctrl+h", "show_help", "Help", priority=True),
-        Binding("ctrl+g", "git_picker", "Git Repo", priority=True),
-        Binding("ctrl+tab", "cycle_focus", "Focus", priority=True),
-        Binding("ctrl+b", "git_branch", "Git Branch", priority=True),
-        Binding("ctrl+o", "git_checkout", "Git Checkout", priority=True),
+        Binding("ctrl+n", "new_connection", "Dashboard"),
+        Binding("ctrl+r", "refresh", "Refresh"),
+        Binding("ctrl+m", "show_manual", "Manual"),
+        Binding("ctrl+j", "launch_jupyter", "Jupyter"),
+        Binding("ctrl+k", "setup_keys", "SSH Keys"),
+        Binding("ctrl+e", "edit_node", "Edit Node"),
+        Binding("ctrl+h", "show_help", "Help"),
+        Binding("ctrl+g", "git_picker", "Git Repo"),
+        Binding("ctrl+b", "git_branch", "Git Branch"),
+        Binding("ctrl+backslash", "toggle_sidebar", "Sidebar", priority=True),
         Binding("escape", "quit"),
         Binding("tab", "cycle_focus", show=False),
         Binding("1", "quick_connect(0)", show=False),
@@ -201,16 +198,12 @@ class JupyterHubTUI(App):
         if 0 <= idx < len(self._node_names):
             self._start_ssh(self._node_names[idx])
 
+    def action_toggle_sidebar(self) -> None:
+        left = self.query_one("#left-panel")
+        left.display = not left.display
+        self._term._resize_pty()
+
     def action_cycle_focus(self) -> None:
-        # Ctrl+T (priority): toggles between terminal and file tree.
-        # Tab (non-priority): toggles between panels in dashboard mode.
-        if self._term.pty_active:
-            tree = self.query_one("#file-tree", Tree)
-            if self.focused is tree:
-                self._term.focus()
-            else:
-                tree.focus()
-            return
         focused = self.focused
         left = self.query_one("#left-panel")
         if focused is not None and left in focused.ancestors_with_self:
@@ -233,7 +226,7 @@ class JupyterHubTUI(App):
             "",
             "[cyan]Navigation[/]",
             "  Tab          Toggle focus between panels",
-            "  Ctrl+Tab     Toggle terminal / file tree during SSH",
+            "  Ctrl+\\       Toggle sidebar (works during SSH)",
             "  1-3          Quick-connect to node by index",
             "  Ctrl+N       Return to dashboard from SSH",
             "",
@@ -247,8 +240,10 @@ class JupyterHubTUI(App):
             "",
             "[cyan]Git[/]",
             "  Ctrl+G       Pick git repo path on remote (saved to config)",
-            "  Ctrl+B       Show branches and current branch",
-            "  Ctrl+O       Checkout a branch",
+            "  Ctrl+B       Git screen: status, log, branches, fetch, pull, checkout",
+            "    f          Fetch (inside git screen)",
+            "    p          Pull (inside git screen)",
+            "    Enter      Checkout selected branch",
             "",
             "[cyan]Config[/]",
             "  Ctrl+E       Edit active node details",
@@ -277,16 +272,6 @@ class JupyterHubTUI(App):
             self.notify("Set git repo path first (Ctrl+G).", severity="warning")
             return
         self.push_screen(GitBranchScreen(self._ssh, repo_path, self._on_git_action))
-
-    def action_git_checkout(self) -> None:
-        if not self._ssh.active:
-            self.notify("No active node.", severity="warning")
-            return
-        repo_path = cfg.git_repo_path(self._data)
-        if repo_path == ".":
-            self.notify("Set git repo path first (Ctrl+G).", severity="warning")
-            return
-        self.push_screen(GitCheckoutScreen(self._ssh, repo_path, self._on_git_action))
 
     def _on_git_action(self) -> None:
         self._update_status()
@@ -649,25 +634,44 @@ class GitPickerScreen(ModalScreen):
 
 
 class GitBranchScreen(ModalScreen):
-    # Show branches on remote git repo. Highlights current branch.
+    # Unified git screen: branch, status, log, actions.
 
-    BINDINGS = [Binding("escape", "app.pop_screen", "Close", show=False)]
+    BINDINGS = [
+        Binding("escape", "app.pop_screen", "Close", show=False),
+        Binding("f", "fetch", "Fetch", show=False),
+        Binding("p", "pull", "Pull", show=False),
+        Binding("c", "checkout_prompt", "Checkout", show=False),
+    ]
 
     DEFAULT_CSS = """
     GitBranchScreen {
         align: center middle;
     }
     #branch-dialog {
-        width: 60;
-        height: auto;
-        max-height: 70%;
+        width: 80;
+        max-height: 85%;
         border: solid $primary;
         background: $surface;
         padding: 1 2;
     }
-    #branch-dialog ListView {
+    #branch-dialog #git-output {
         height: 1fr;
-        max-height: 15;
+        max-height: 20;
+        min-height: 5;
+    }
+    #branch-dialog #git-log {
+        height: 1fr;
+        max-height: 10;
+        min-height: 3;
+    }
+    #branch-dialog .git-section {
+        color: $text-muted;
+        text-style: bold;
+        margin-top: 1;
+    }
+    #branch-dialog #git-status {
+        height: auto;
+        max-height: 8;
     }
     """
 
@@ -678,81 +682,82 @@ class GitBranchScreen(ModalScreen):
         self._on_close = on_close
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="branch-dialog"):
-            yield Label(f"Branches: {self._repo}", id="branch-title")
+        with VerticalScroll(id="branch-dialog"):
+            yield Label(f"Git: {self._repo}", id="branch-title")
+            yield Label("Status", classes="git_section")
+            yield Static("", id="git-status")
+            yield Label("Recent commits", classes="git_section")
+            yield Static("", id="git-log")
+            yield Label("Branches", classes="git_section")
             yield ListView(id="branch-list")
+            yield Static("", id="git-output")
 
     def on_mount(self) -> None:
+        self._refresh()
+
+    def _refresh(self) -> None:
         node = self._ssh.active.name
+        # Status
+        porcelain = self._ssh.remote_git_status(node, self._repo)
+        if porcelain:
+            lines = porcelain.splitlines()
+            status_lines = [l for l in lines if not l.startswith("##")]
+            branch_line = lines[0].replace("## ", "") if lines else ""
+            status_text = f"Branch: {branch_line}\n"
+            if status_lines:
+                status_text += "\n".join(status_lines[:10])
+            else:
+                status_text += "Working tree clean"
+        else:
+            status_text = "[red]Not a git repo or connection failed[/]"
+        self.query_one("#git-status", Static).update(status_text)
+        # Log
+        log = self._ssh.remote_git_log(node, self._repo, 10)
+        self.query_one("#git-log", Static).update(log or "[dim]No commits[/]")
+        # Branches
         branches = self._ssh.remote_git_branches(node, self._repo)
         lv = self.query_one("#branch-list", ListView)
+        lv.clear()
         for b in branches:
             prefix = "[green]*[/] " if b.startswith("*") else "   "
             item = ListItem(Label(f"{prefix}{b}"))
-            item.data = b
             lv.append(item)
         if not branches:
-            lv.append(ListItem(Label("[red]No branches or not a git repo[/]")))
+            lv.append(ListItem(Label("[dim]No branches[/]")))
 
-
-class GitCheckoutScreen(ModalScreen):
-    # Pick a branch to checkout on remote git repo.
-
-    BINDINGS = [Binding("escape", "app.pop_screen", "Cancel", show=False)]
-
-    DEFAULT_CSS = """
-    GitCheckoutScreen {
-        align: center middle;
-    }
-    #checkout-dialog {
-        width: 60;
-        height: auto;
-        max-height: 70%;
-        border: solid $primary;
-        background: $surface;
-        padding: 1 2;
-    }
-    #checkout-dialog ListView {
-        height: 1fr;
-        max-height: 15;
-    }
-    """
-
-    def __init__(self, ssh, repo_path, on_close):
-        super().__init__()
-        self._ssh = ssh
-        self._repo = repo_path
-        self._on_close = on_close
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="checkout-dialog"):
-            yield Label(f"Checkout branch: {self._repo}", id="checkout-title")
-            yield ListView(id="checkout-list")
-
-    def on_mount(self) -> None:
+    def action_fetch(self) -> None:
+        self.query_one("#git-output", Static).update("[yellow]Fetching...[/]")
         node = self._ssh.active.name
-        self._branches = self._ssh.remote_git_branches(node, self._repo)
-        lv = self.query_one("#checkout-list", ListView)
-        for b in self._branches:
-            prefix = "[green]*[/] " if b.startswith("*") else "    "
-            item = ListItem(Label(f"{prefix}{b}"))
-            item.data = b
-            lv.append(item)
-        if not self._branches:
-            lv.append(ListItem(Label("[red]No branches or not a git repo[/]")))
+        ok = self._ssh.remote_git_fetch(node, self._repo)
+        if ok:
+            self.query_one("#git-output", Static).update("[green]Fetch OK[/]")
+            self._refresh()
+        else:
+            self.query_one("#git-output", Static).update("[red]Fetch failed[/]")
+
+    def action_pull(self) -> None:
+        self.query_one("#git-output", Static).update("[yellow]Pulling...[/]")
+        node = self._ssh.active.name
+        ok, msg = self._ssh.remote_git_pull(node, self._repo)
+        if ok:
+            self.query_one("#git-output", Static).update(f"[green]Pull OK[/]\n{msg}")
+            self._refresh()
+        else:
+            self.query_one("#git-output", Static).update(f"[red]Pull failed[/]\n{msg}")
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        branch = event.item.data
+        if event.list_view.id != "branch-list":
+            return
+        branch = str(event.item.query_one(Label).renderable).replace("* ", "").strip()
         if not branch:
             return
         node = self._ssh.active.name
         ok = self._ssh.remote_git_checkout(node, self._repo, branch)
         if ok:
-            self.app.pop_screen()
-            self._on_close()
-            self.app.notify(f"Checked out {branch}")
+            self.query_one("#git-output", Static).update(f"[green]Checked out {branch}[/]")
+            self._refresh()
         else:
-            self.app.notify(f"Checkout failed for {branch}", severity="error")
+            self.query_one("#git-output", Static).update(f"[red]Checkout failed: {branch}[/]")
 
 
 def main() -> None:

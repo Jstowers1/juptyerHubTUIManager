@@ -18,20 +18,29 @@ Replaces JupyterHub dependency for SSH, git, venv, and notebook workflows.
 |-----|--------|
 | `1`-`3` | Connect to node by index (dashboard only) |
 | `Tab` | Toggle focus between panels (dashboard) |
-| `Ctrl+Tab` | Toggle between terminal and file tree (works during SSH) |
+| `Ctrl+\` | Toggle sidebar (works during SSH) |
 | `Ctrl+N` | Disconnect and return to dashboard |
 | `Ctrl+E` | Edit active node details (host, user, port, proxy) |
 | `Ctrl+M` | View cluster manual |
-| `Ctrl+J` | Launch Jupyter on active node (SSH tunnel + euporie) |
+| `Ctrl+J` | Launch Jupyter on active node (SSH tunnel + euporie in PTY) |
 | `Ctrl+K` | Generate and copy SSH keys to all nodes |
 | `Ctrl+R` | Refresh status bar and file tree |
 | `Ctrl+G` | Pick git repo path on remote (browse remote dirs) |
-| `Ctrl+B` | Show git branches on remote |
-| `Ctrl+O` | Checkout a branch on remote |
+| `Ctrl+B` | Git screen: status, log, branches, fetch, pull, checkout |
 | `Ctrl+H` | Show help |
 | `Esc` | Quit |
 
-Node selection also works by arrow-navigating the list and pressing Enter.
+During SSH, all Ctrl keybindings work via terminal escape hatches.
+The terminal intercepts them before sending to the PTY.
+
+### Inside the Git screen (Ctrl+B)
+
+| Key | Action |
+|-----|--------|
+| `f` | Fetch |
+| `p` | Pull |
+| `Enter` | Checkout selected branch |
+| `Esc` | Close |
 
 ## Status bar
 
@@ -83,15 +92,18 @@ Example: worker-1 and worker-2 are behind login:
 
 ### Git repo path
 
-Set via Ctrl+G (browses the remote filesystem). Git status, branch info,
-and checkout all operate on the remote repo.
+Set via Ctrl+G (browses the remote filesystem). Git status, log, branches,
+fetch, pull, and checkout all operate on the remote repo.
+
+### ControlMaster
+
+The interactive SSH session becomes a ControlMaster. All remote commands
+(file browser, git, branches) reuse that connection without re-authenticating.
 
 ## Notes
 
-- SSH sessions run in an embedded terminal in the right panel. No tmux or
-  separate windows needed. Password and passphrase prompts work inline.
-- ControlMaster multiplexes the SSH connection: file browser, git status,
-  and branch commands reuse the interactive session without re-auth.
-- Ctrl+Tab switches to the file tree during SSH so you can browse without
-  leaving the terminal.
+- SSH sessions run in an embedded terminal in the right panel.
+  Password and passphrase prompts work inline.
 - Run inside kitty for inline notebook graphics via euporie.
+- Notebooks live on the remote servers. Ctrl+J SSH-tunnels the Jupyter
+  port and launches euporie inside the PTY to render them.

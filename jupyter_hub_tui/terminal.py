@@ -9,7 +9,6 @@ import select
 import struct
 import fcntl
 import termios
-import signal
 from typing import Optional
 
 import pyte
@@ -46,6 +45,7 @@ def key_to_bytes(key: str, char: str | None) -> bytes:
         "ctrl+j": b"\x0a",
         "ctrl+k": b"\x0b",
         "ctrl+l": b"\x0c",
+        "ctrl+m": b"\x0d",
         "ctrl+n": b"\x0e",
         "ctrl+o": b"\x0f",
         "ctrl+p": b"\x10",
@@ -65,6 +65,23 @@ def key_to_bytes(key: str, char: str | None) -> bytes:
     if char:
         return char.encode("utf-8")
     return b""
+
+
+# Keys that escape the terminal during SSH.
+# Each maps to an app action name.
+ESCAPE_HATCH_KEYS = {
+    "ctrl+n": "new_connection",
+    "ctrl+r": "refresh",
+    "ctrl+m": "show_manual",
+    "ctrl+k": "setup_keys",
+    "ctrl+e": "edit_node",
+    "ctrl+h": "show_help",
+    "ctrl+g": "git_picker",
+    "ctrl+b": "git_branch",
+    "ctrl+o": "git_checkout",
+    "ctrl+backslash": "toggle_sidebar",
+    "ctrl+j": "launch_jupyter",
+}
 
 
 class TerminalDisplay(Widget):
@@ -103,8 +120,16 @@ class TerminalDisplay(Widget):
         return self._pty_running
 
     def on_key(self, event) -> None:
-        # App priority bindings already fired before this.
+        # During SSH, intercept escape-hatch keys and route to app actions.
+        # All other keys go to the PTY. This bypasses Textual's binding
+        # dispatch entirely, which is unreliable under kitty keyboard protocol.
         if self._pty_running and self._master_fd is not None:
+            action = ESCAPE_HATCH_KEYS.get(event.key)
+            if action:
+                event.prevent_default()
+                event.stop()
+                self.app.call_later(self.app.run_action, action)
+                return
             self.send_key(event.key, event.character)
             event.prevent_default()
             event.stop()
@@ -206,7 +231,6 @@ class TerminalDisplay(Widget):
                 line = " "
             if row == cursor.y and self._pty_running:
                 col = min(cursor.x, len(line))
-                # Render cursor as reverse video block.
                 before = line[:col]
                 at = line[col] if col < len(line) else " "
                 after = line[col + 1:] if col + 1 <= len(line) else ""
