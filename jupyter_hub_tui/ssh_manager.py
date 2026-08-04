@@ -118,18 +118,20 @@ class SSHManager:
         cmd += [
             "-o", f"ControlPath={_control_path(name)}",
             "-o", "ConnectTimeout=5",
+            "-o", "BatchMode=yes",
             "-p", str(node.port), f"{node.user}@{node.host}",
         ]
         return cmd
 
     def list_remote_dir(self, name: str, path: str = "~") -> list[dict]:
-        # List a directory on a remote node. Returns list of {name, is_dir}.
-        # ponytail: blocking subprocess, ~0.5s per call. Fine for browsing.
         cmd = self._ssh_prefix(name) + [
             "-o", "ConnectTimeout=5",
             f"ls -1F {path} 2>/dev/null",
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        except subprocess.TimeoutExpired:
+            return []
         entries = []
         for line in result.stdout.strip().splitlines():
             if not line:

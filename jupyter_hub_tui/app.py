@@ -178,6 +178,7 @@ class JupyterHubTUI(App):
         self._update_status()
         cmd_display = self.query_one("#ssh-command-display", Label)
         cmd_display.update(f"[dim]$ {self._ssh.command_str(name)}[/]")
+        self.notify(f"Connecting to: {node.name} ({node.host})")
         self._content.display = False
         term = self._term
         term.stop()
@@ -186,8 +187,7 @@ class JupyterHubTUI(App):
         cmd = self._ssh.launch(name)
         term.start(cmd)
         term.focus()
-        self._populate_file_tree()
-        self.notify(f"Connecting to: {node.name} ({node.host})")
+        self.call_later(self._populate_file_tree)
 
     def on_terminal_display_exited(self, event: TerminalDisplay.Exited) -> None:
         self._ssh._active = None

@@ -137,10 +137,11 @@ class TerminalDisplay(Widget):
     def start(self, command: list[str]) -> None:
         self._command = command
         self._pending_start = True
-        # If widget already has size, start now. Otherwise on_resize fires
-        # once layout settles, which triggers _try_start.
-        if self.size.width > 0 and self.size.height > 0:
-            self._try_start()
+        self._try_start()
+        if self._pending_start:
+            self.set_timer(0.05, self._try_start)
+            self.set_timer(0.15, self._try_start)
+            self.set_timer(0.3, self._try_start)
 
     def _try_start(self) -> None:
         if not self._pending_start:
