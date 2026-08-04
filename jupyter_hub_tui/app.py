@@ -13,7 +13,6 @@ from textual.widgets import Input, Button, Tree, RichLog
 from textual.widgets import TabbedContent, TabPane
 
 from . import config as cfg
-from .git_status import status as git_status_info
 from .ssh_manager import SSHManager
 from .terminal import TerminalDisplay
 
@@ -21,13 +20,6 @@ from .terminal import TerminalDisplay
 CSS = """
 Screen {
     background: $surface;
-}
-
-#status-bar {
-    dock: bottom;
-    height: 1;
-    background: $panel;
-    color: $text;
 }
 
 #left-panel {
@@ -135,6 +127,7 @@ class FocusableLog(RichLog):
 class JupyterHubTUI(App):
 
     TITLE = "Jupyter Hub TUI"
+    SUB_TITLE = "NO CONNECTION"
     CSS = CSS
 
     # Terminal.on_key intercepts escape hatches during SSH and calls
@@ -180,7 +173,6 @@ class JupyterHubTUI(App):
                     with TabPane("Terminal", id="terminal-tab"):
                         yield TerminalDisplay(id="term-display")
         yield Footer()
-        yield Static("", id="status-bar")
 
     def on_mount(self) -> None:
         self._populate_nodes()
@@ -263,10 +255,10 @@ class JupyterHubTUI(App):
         active = self._ssh.active
         if not active:
             return
-        # Wait for ControlMaster socket to come up (user enters passphrase).
+        # Poll until background SSH works (agent key available).
         for _ in range(30):
             if await loop.run_in_executor(
-                None, self._ssh.check_master, active.name
+                None, self._ssh.check_ssh_ready, active.name
             ):
                 break
             await asyncio.sleep(1)
@@ -317,10 +309,8 @@ class JupyterHubTUI(App):
         active = self._ssh.active
         if not active:
             return
-        bar = self.query_one("#status-bar", Static)
-        node_text = f"[cyan]CONNECTED:{active.name}[/]"
         git_text = self._parse_git_status(info["git_porcelain"])
-        bar.update(f" {node_text}{git_text}")
+        self.sub_title = f"[cyan]{active.name}[/]{git_text}"
 
     def on_terminal_display_exited(self, event: TerminalDisplay.Exited) -> None:
         if event.terminal_display.id != "term-display":
@@ -526,23 +516,16 @@ class JupyterHubTUI(App):
         return f"  [bright_cyan]git:{branch}{dirty_text}[/]"
 
     def _update_status(self) -> None:
-        bar = self.query_one("#status-bar", Static)
         active = self._ssh.active
-        if active:
-            node_text = f"[cyan]CONNECTED:{active.name}[/]"
-        else:
-            node_text = "[dim]NO CONNECTION[/]"
+        if not active:
+            self.sub_title = "[dim]NO CONNECTION[/]"
+            return
         repo_path = cfg.git_repo_path(self._data)
         git_text = ""
-        if active and repo_path != ".":
+        if repo_path != ".":
             git_text = self._parse_git_status(
                 self._ssh.remote_git_status(active.name, repo_path) or "")
-        elif repo_path != ".":
-            gs = git_status_info(repo_path)
-            if gs:
-                dirty_text = "[red]*[/]" if gs.dirty else ""
-                git_text = f"  [bright_cyan]git:{gs.branch}{dirty_text}[/]"
-        bar.update(f" {node_text}{git_text}")
+        self.sub_title = f"[cyan]{active.name}[/]{git_text}"
 
     def _render_welcome(self) -> None:
         if self._data.get("_example"):

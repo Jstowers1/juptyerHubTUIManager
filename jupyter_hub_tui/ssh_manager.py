@@ -104,8 +104,13 @@ class SSHManager:
         ]
         return cmd
 
-    def check_master(self, name: str) -> bool:
-        return self.list_remote_dir(name, "~") != []
+    def check_ssh_ready(self, name: str) -> bool:
+        cmd = self._ssh_prefix(name) + ["echo ok"]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False
+        return result.returncode == 0 and "ok" in result.stdout
 
     def list_remote_dir(self, name: str, path: str = "~") -> list[dict]:
         cmd = self._ssh_prefix(name) + [
