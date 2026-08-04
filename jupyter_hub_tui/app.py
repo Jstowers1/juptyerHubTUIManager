@@ -13,7 +13,6 @@ from textual.widgets import Input, Button, Tree, RichLog
 from textual.widgets import TabbedContent, TabPane
 
 from . import config as cfg
-from . import venv
 from .git_status import status as git_status_info
 from .ssh_manager import SSHManager
 from .terminal import TerminalDisplay
@@ -138,6 +137,7 @@ class JupyterHubTUI(App):
         Binding("ctrl+backslash", "toggle_sidebar", "Sidebar", priority=True),
         Binding("ctrl+t", "toggle_term_focus", "Focus"),
         Binding("ctrl+w", "close_tab", "Close Tab"),
+        Binding("ctrl+o", "activate_venv", "Venv"),
         Binding("escape", "quit"),
         Binding("tab", "cycle_focus", show=False),
         Binding("1", "quick_connect(0)", show=False),
@@ -149,6 +149,7 @@ class JupyterHubTUI(App):
         super().__init__()
         self._data = cfg.load()
         self._ssh = SSHManager(self._data)
+        self._nb_meta: dict[str, dict] = {}
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -195,6 +196,7 @@ class JupyterHubTUI(App):
         hp.write("  Ctrl+K       Set up SSH keys")
         hp.write("  Ctrl+M       View cluster manual")
         hp.write("  Ctrl+R       Refresh status / file tree")
+        hp.write("  Ctrl+O       Activate remote venv")
         hp.write("")
         hp.write("[cyan]Git[/]")
         hp.write("  Ctrl+G       Pick git repo path (remote)")
@@ -348,6 +350,23 @@ class JupyterHubTUI(App):
             term.can_focus = True
             term.focus()
 
+    def action_activate_venv(self) -> None:
+        if not self._ssh.active:
+            self.notify("No active SSH session.", severity="warning")
+            return
+        remote_venv = cfg.remote_venv_path(self._data)
+        if not remote_venv:
+            self.notify("No remote venv path in config.", severity="warning")
+            return
+        term = self._active_term()
+        if not term.pty_active:
+            self.notify("Terminal not active.", severity="warning")
+            return
+        # Go home, source bashrc, activate venv.
+        cmd = f"cd ~ && source ~/.bashrc && source {remote_venv}/bin/activate\n"
+        term.send_input(cmd)
+        self.notify(f"Activating venv: {remote_venv}")
+
     def action_close_tab(self) -> None:
         tabs = self.query_one("#term-tabs", TabbedContent)
         active = tabs.active
@@ -356,9 +375,26 @@ class JupyterHubTUI(App):
             return
         term = self._active_term()
         term.stop()
+        # Upload notebook changes back to remote.
+        meta = self._nb_meta.pop(active, None)
+        if meta and meta.get("node"):
+            self.notify(f"Uploading changes to {meta['remote']}...")
+            self.run_worker(
+                self._sync_notebook(meta["node"], meta["local"], meta["remote"]),
+                exclusive=True)
         tabs.remove_pane(active)
         tabs.active = "terminal-tab"
         self._term.focus()
+
+    async def _sync_notebook(self, node: str, local: str, remote: str) -> None:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        ok = await loop.run_in_executor(
+            None, self._ssh.scp_upload, node, local, remote)
+        if ok:
+            self.notify("Notebook synced to remote.")
+        else:
+            self.notify("Failed to sync notebook.", severity="error")
 
     def action_cycle_focus(self) -> None:
         # Tab: Dashboard cycles left panel <-> content.
@@ -535,7 +571,7 @@ class JupyterHubTUI(App):
         self._open_notebook(node_name, full_path)
 
     def _open_notebook(self, node_name: str, notebook_path: str) -> None:
-        if not self._term.pty_active:
+        if not self._ssh.active:
             self.notify("No active SSH session.", severity="warning")
             return
         self.notify(f"Downloading {notebook_path}...")
@@ -544,31 +580,34 @@ class JupyterHubTUI(App):
             exclusive=True)
 
     async def _open_notebook_worker(self, node_name: str, notebook_path: str) -> None:
-        import asyncio, tempfile, os
+        import asyncio, os
         loop = asyncio.get_event_loop()
         os.makedirs("/tmp/jhtui-nb", exist_ok=True)
         basename = notebook_path.rsplit("/", 1)[-1]
-        local_path = f"/tmp/jhtui-nb/{basename}"
+        self._nb_counter += 1
+        local_path = f"/tmp/jhtui-nb/{self._nb_counter}-{basename}"
         ok = await loop.run_in_executor(
             None, self._ssh.scp_file, node_name, notebook_path, local_path)
         if not ok:
             self.notify("Failed to download notebook.", severity="error")
             return
-        # Find euporie in venv.
         venv_euporie = os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
             ".venv", "bin", "euporie")
         euporie_bin = venv_euporie if os.path.exists(venv_euporie) else "euporie"
         cmd = [euporie_bin, "notebook", local_path]
-        self._add_notebook_tab(basename, local_path, cmd)
+        self._add_notebook_tab(basename, local_path, notebook_path, cmd)
 
-    def _add_notebook_tab(self, title: str, local_path: str, cmd: list[str]) -> None:
-        self._nb_counter += 1
+    def _add_notebook_tab(self, title: str, local_path: str, remote_path: str, cmd: list[str]) -> None:
         tab_id = f"nb-tab-{self._nb_counter}"
         tabs = self.query_one("#term-tabs", TabbedContent)
         term = TerminalDisplay()
         pane = TabPane(title, term, id=tab_id)
         tabs.add_pane(pane)
+        self._nb_meta[tab_id] = {
+            "local": local_path, "remote": remote_path,
+            "node": self._ssh.active.name if self._ssh.active else None,
+        }
         tabs.active = tab_id
         term.start(cmd)
         term.focus()
@@ -591,12 +630,11 @@ class JupyterHubTUI(App):
         self._content.update(manual_path.read_text())
 
     def action_setup_keys(self) -> None:
-        # Run key setup in the embedded terminal.
         self._content.display = False
+        self.query_one("#term-tabs").display = True
         term = self._term
         term.stop()
         term.reset()
-        term.display = True
         term.start(self._ssh.setup_keys_command())
         term.focus()
         self.notify("Setting up SSH keys. Enter passwords as prompted.")

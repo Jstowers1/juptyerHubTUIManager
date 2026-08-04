@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 
 from . import config as cfg
@@ -130,7 +130,7 @@ class SSHManager:
     def list_remote_dir(self, name: str, path: str = "~") -> list[dict]:
         cmd = self._ssh_prefix(name) + [
             "-o", "ConnectTimeout=5",
-            f"ls -1F {path} 2>/dev/null",
+            f"ls -1F {shlex.quote(path)} 2>/dev/null",
         ]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
@@ -149,7 +149,7 @@ class SSHManager:
         # Run git status on remote. Returns porcelain output or None.
         cmd = self._ssh_prefix(name) + [
             "-o", "ConnectTimeout=5",
-            f"git -C {path} status --porcelain=v1 -b 2>/dev/null",
+            f"git -C {shlex.quote(path)} status --porcelain=v1 -b 2>/dev/null",
         ]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -163,7 +163,7 @@ class SSHManager:
         # Return recent commit log from remote.
         cmd = self._ssh_prefix(name) + [
             "-o", "ConnectTimeout=5",
-            f"git -C {path} log --oneline -{count} 2>/dev/null",
+            f"git -C {shlex.quote(path)} log --oneline -{count} 2>/dev/null",
         ]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -174,7 +174,7 @@ class SSHManager:
     def remote_git_fetch(self, name: str, path: str) -> bool:
         cmd = self._ssh_prefix(name) + [
             "-o", "ConnectTimeout=10",
-            f"git -C {path} fetch 2>&1",
+            f"git -C {shlex.quote(path)} fetch 2>&1",
         ]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -185,7 +185,7 @@ class SSHManager:
     def remote_git_pull(self, name: str, path: str) -> tuple[bool, str]:
         cmd = self._ssh_prefix(name) + [
             "-o", "ConnectTimeout=10",
-            f"git -C {path} pull 2>&1",
+            f"git -C {shlex.quote(path)} pull 2>&1",
         ]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -196,7 +196,7 @@ class SSHManager:
     def remote_git_diff(self, name: str, path: str) -> str:
         cmd = self._ssh_prefix(name) + [
             "-o", "ConnectTimeout=5",
-            f"git -C {path} diff 2>/dev/null",
+            f"git -C {shlex.quote(path)} diff 2>/dev/null",
         ]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -208,7 +208,7 @@ class SSHManager:
         # List branches on remote. Returns [branch_name, ...].
         cmd = self._ssh_prefix(name) + [
             "-o", "ConnectTimeout=5",
-            f"git -C {path} branch --format='%(refname:short)' 2>/dev/null",
+            f"git -C {shlex.quote(path)} branch --format='%(refname:short)' 2>/dev/null",
         ]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -222,7 +222,7 @@ class SSHManager:
         # Checkout a branch on remote. Returns True on success.
         cmd = self._ssh_prefix(name) + [
             "-o", "ConnectTimeout=5",
-            f"git -C {path} checkout {branch} 2>&1",
+            f"git -C {shlex.quote(path)} checkout {shlex.quote(branch)} 2>&1",
         ]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -235,7 +235,7 @@ class SSHManager:
         if not venv_path:
             return False
         cmd = self._ssh_prefix(name) + [
-            f"test -d {venv_path}/bin && echo yes 2>/dev/null",
+            f"test -d {shlex.quote(venv_path)}/bin && echo yes 2>/dev/null",
         ]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -264,9 +264,26 @@ class SSHManager:
             return False
         return result.returncode == 0
 
-    def run_in_term(self, name: str, remote_cmd: str) -> list[str]:
-        # Return raw ssh command with a remote command to run in PTY.
-        return self.raw_ssh_command(name) + [remote_cmd]
+    def scp_upload(self, name: str, local_path: str, remote_path: str) -> bool:
+        # Upload a file from local to remote via scp.
+        node = self._nodes[name]
+        scp_args = ["scp"]
+        if node.proxy and node.proxy in self._nodes:
+            proxy = self._nodes[node.proxy]
+            scp_args += ["-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}"]
+        scp_args += [
+            "-o", f"ControlPath={_control_path(name)}",
+            "-o", "ConnectTimeout=5",
+            "-o", "BatchMode=yes",
+            "-P", str(node.port),
+            local_path,
+            f"{node.user}@{node.host}:{remote_path}",
+        ]
+        try:
+            result = subprocess.run(scp_args, capture_output=True, text=True, timeout=15)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False
+        return result.returncode == 0
 
     def setup_keys_command(self) -> list[str]:
         # Return a shell command that generates a key and copies it to all nodes.
@@ -280,35 +297,6 @@ class SSHManager:
             + "; ".join(targets)
         )
         return ["bash", "-c", script]
-
-    def setup_keys(self, name: str | None = None) -> list[str]:
-        # Generate an SSH key if none exists, then copy to target nodes.
-        # Returns a list of status messages for display.
-        messages: list[str] = []
-        key_path = Path(os.path.expanduser("~/.ssh/id_ed25519"))
-        if not key_path.exists():
-            subprocess.run(
-                ["ssh-keygen", "-t", "ed25519", "-f", str(key_path), "-N", ""],
-                check=True,
-            )
-            messages.append("Generated ed25519 key.")
-        else:
-            messages.append("Key exists, skipping generation.")
-        targets = [name] if name else list(self._nodes.keys())
-        for n in targets:
-            if n not in self._nodes:
-                continue
-            node = self._nodes[n]
-            result = subprocess.run(
-                ["ssh-copy-id", "-p", str(node.port)]
-                + [f"{node.user}@{node.host}"],
-                capture_output=True, text=True,
-            )
-            if result.returncode == 0:
-                messages.append(f"Key copied to {n}.")
-            else:
-                messages.append(f"Failed on {n}: {result.stderr.strip()}")
-        return messages
 
 
 def _base_ssh_command() -> list[str]:
@@ -352,6 +340,9 @@ def _self_check() -> None:
     assert "ControlMaster" in raw_str, "ControlMaster missing"
     assert "tui-ssh-worker-1" in raw_str, "per-node ControlPath missing"
     assert "ssh-agent" in raw_str, "ssh-agent wrapper missing"
+    assert hasattr(mgr, "scp_file"), "scp_file missing"
+    assert hasattr(mgr, "scp_upload"), "scp_upload missing"
+    assert not hasattr(mgr, "setup_keys"), "blocking setup_keys should be deleted"
     print("SSH self-check passed")
 
 

@@ -79,6 +79,7 @@ ESCAPE_HATCH_KEYS = {
     "ctrl+g": "git_picker",
     "ctrl+b": "git_branch",
     "ctrl+w": "close_tab",
+    "ctrl+o": "activate_venv",
     "ctrl+backslash": "toggle_sidebar",
 }
 
@@ -170,6 +171,7 @@ class TerminalDisplay(Widget):
         self._screen.resize(h, w)
         self._pid, self._master_fd = pty.fork()
         if self._pid == 0:
+            os.setsid()
             winsize = struct.pack("HHHH", h, w, 0, 0)
             try:
                 fcntl.ioctl(1, termios.TIOCSWINSZ, winsize)
@@ -260,6 +262,12 @@ class TerminalDisplay(Widget):
         self._pty_running = False
         self.can_focus = False
         self._stop_timer()
+        if self._pid is not None:
+            try:
+                os.waitpid(self._pid, 0)
+            except ChildProcessError:
+                pass
+            self._pid = None
         if self._master_fd is not None:
             try:
                 os.close(self._master_fd)
@@ -304,8 +312,8 @@ class TerminalDisplay(Widget):
         self._stop_timer()
         if self._pid is not None:
             try:
-                os.kill(self._pid, 15)
-            except ProcessLookupError:
+                os.killpg(os.getpgid(self._pid), 9)
+            except (ProcessLookupError, PermissionError):
                 pass
             self._pid = None
         if self._master_fd is not None:
