@@ -140,7 +140,7 @@ class JupyterHubTUI(App):
         if not root.is_dir():
             tree.root.add_leaf("[red]Repo path not found[/]")
             return
-        self._add_tree_node(tree.root, root, max_depth=2)
+        self._add_tree_node(tree.root, root, depth=2)
 
     def _add_tree_node(self, node: TreeNode, path: Path, depth: int) -> None:
         # ponytail: fixed depth 2, no lazy loading. Add when dirs get large.
