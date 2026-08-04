@@ -1,7 +1,6 @@
 # Resolve environment for venv detection.
 
 import os
-import shutil
 from pathlib import Path
 
 
@@ -15,8 +14,8 @@ def active_path() -> str | None:
     return os.environ.get("VIRTUAL_ENV")
 
 
-def exists(config_path: str) -> bool:
-    # Check if the configured venv path exists on disk.
+def local_exists(config_path: str) -> bool:
+    # Check if the configured local venv path exists on disk.
     if not config_path:
         return False
     return Path(os.path.expanduser(config_path)).exists()

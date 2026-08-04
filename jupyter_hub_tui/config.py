@@ -34,6 +34,18 @@ def venv_path(data: dict[str, Any]) -> str:
     return data.get("venv", {}).get("path", "")
 
 
+def local_venv_path(data: dict[str, Any]) -> str:
+    return data.get("venv", {}).get("local_path", "")
+
+
+def remote_venv_path(data: dict[str, Any]) -> str:
+    return data.get("venv", {}).get("remote_path", "")
+
+
+def git_repo_path(data: dict[str, Any]) -> str:
+    return data.get("git", {}).get("repo_path", ".")
+
+
 def jupyter_settings(data: dict[str, Any]) -> dict[str, Any]:
     return data.get("jupyter", {})
 

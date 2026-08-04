@@ -22,8 +22,12 @@
     }
   },
   "venv": {
-    "path": "~/.venv/icetop",
+    "local_path": ".venv",
+    "remote_path": "~/.venv/icetop",
     "activate_script": "bin/activate"
+  },
+  "git": {
+    "repo_path": "."
   },
   "jupyter": {
     "port": 8888,

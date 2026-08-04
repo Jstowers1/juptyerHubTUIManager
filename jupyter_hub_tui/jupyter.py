@@ -6,13 +6,14 @@ import subprocess
 from .ssh_manager import SSHManager
 
 
-def launch(ssh: SSHManager, node_name: str, port: int = 8888) -> None:
-    # Start jupyter kernel on the remote node via SSH tunnel,
+def launch(ssh: SSHManager, node_name: str, port: int = 8888,
+           remote_venv: str = "~/.venv/icetop") -> None:
+    # Start jupyter on the remote node via SSH tunnel,
     # then launch euporie connected to the local tunnel port.
     if node_name not in ssh.nodes:
         raise ValueError(f"Unknown node: {node_name}")
     remote_cmd = (
-        f"source ~/.venv/icetop/bin/activate 2>/dev/null; "
+        f"source {remote_venv}/bin/activate 2>/dev/null; "
         f"jupyter lab --no-browser --port={port} --ServerApp.token=''"
     )
     # Tunnel the remote jupyter port to localhost.

@@ -22,7 +22,7 @@ Replaces JupyterHub dependency for SSH, git, venv, and notebook workflows.
 | `e` | Edit active node details (host, user, port, proxy) |
 | `m` | View cluster manual |
 | `j` | Launch Jupyter on active node (SSH tunnel + euporie) |
-| `r` | Refresh status bar |
+| `r` | Refresh status bar and file tree |
 | `q` | Quit |
 
 Node selection also works by arrow-navigating the list and pressing Enter.
@@ -37,8 +37,9 @@ The bottom bar shows venv state, active node, and git branch/dirty status:
 
 ## Config
 
-`config.json` holds node connection details, venv path, and Jupyter settings.
-This file is gitignored. `config.example.json` is the template for peers.
+`config.json` holds node connection details, venv paths (local and remote),
+git repo path, and Jupyter settings. This file is gitignored.
+`config.example.json` is the template for peers.
 
 Node configs support a `proxy` field for jump hosts. Cobalt and npx-submitter
 route through pub automatically via SSH `ProxyJump`.

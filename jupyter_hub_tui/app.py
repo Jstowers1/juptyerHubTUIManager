@@ -8,10 +8,11 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen
 from textual.widgets import Footer, Header, Static, ListView, ListItem, Label
-from textual.widgets import Markdown
-from textual.widgets import Input, Button
-from textual.containers import Container
+from textual.widgets import Input, Button, Tree
+
+from textual.widgets._tree import TreeNode
 
 from . import config as cfg
 from . import venv
@@ -31,18 +32,6 @@ Screen {
     color: $text;
 }
 
-#status-bar .venv-on {
-    color: $success;
-}
-
-#status-bar .venv-off {
-    color: $error;
-}
-
-#status-bar .node-connected {
-    color: $accent;
-}
-
 #left-panel {
     width: 1fr;
     border: solid $primary;
@@ -55,22 +44,33 @@ Screen {
     padding: 0 1;
 }
 
-.node-list {
-    height: auto;
-}
-
 .node-list-label {
     color: $text-muted;
     text-style: bold;
+}
+
+.section-label {
+    color: $text-muted;
+    text-style: bold;
+    margin-top: 1;
 }
 
 #content-area {
     padding: 1 2;
 }
 
-.example-warning {
-    color: $warning;
-    text-style: italic;
+#file-tree {
+    height: 1fr;
+    min-height: 5;
+}
+
+#node-list {
+    height: auto;
+    max-height: 40%;
+}
+
+#ssh-command-display {
+    margin-top: 1;
 }
 """
 
@@ -109,6 +109,8 @@ class JupyterHubTUI(App):
                 yield Label("Cluster Nodes", classes="node-list-label")
                 yield ListView(id="node-list")
                 yield Label("", id="ssh-command-display")
+                yield Label("Files", classes="section-label")
+                yield Tree("root", id="file-tree")
             with VerticalScroll(id="right-panel"):
                 yield Static("", id="content-area")
         yield Footer()
@@ -118,13 +120,44 @@ class JupyterHubTUI(App):
         self._populate_nodes()
         self._update_status()
         self._render_welcome()
+        self._populate_file_tree()
 
     def _populate_nodes(self) -> None:
         lv = self.query_one("#node-list", ListView)
+        lv.clear()
         for name, node in self._ssh.nodes.items():
             item = NodeListItem(Label(f"{name}: {node.description}"))
             item.data = name
             lv.append(item)
+
+    def _populate_file_tree(self) -> None:
+        tree = self.query_one("#file-tree", Tree)
+        tree.clear()
+        repo_path = cfg.git_repo_path(self._data)
+        if repo_path == ".":
+            repo_path = str(Path(__file__).resolve().parent.parent)
+        root = Path(repo_path).expanduser()
+        if not root.is_dir():
+            tree.root.add_leaf("[red]Repo path not found[/]")
+            return
+        self._add_tree_node(tree.root, root, max_depth=2)
+
+    def _add_tree_node(self, node: TreeNode, path: Path, depth: int) -> None:
+        # ponytail: fixed depth 2, no lazy loading. Add when dirs get large.
+        if depth <= 0:
+            return
+        try:
+            entries = sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name))
+        except PermissionError:
+            return
+        for entry in entries:
+            if entry.name.startswith("."):
+                continue
+            if entry.is_dir():
+                child = node.add(entry.name, allow_expand=True)
+                self._add_tree_node(child, entry, depth - 1)
+            else:
+                node.add_leaf(entry.name)
 
     def _update_status(self) -> None:
         bar = self.query_one("#status-bar", Static)
@@ -136,8 +169,9 @@ class JupyterHubTUI(App):
         else:
             node_text = "[dim]NO CONNECTION[/]"
 
-        # Git branch and dirty state.
-        repo_path = str(Path(__file__).resolve().parent.parent)
+        repo_path = cfg.git_repo_path(self._data)
+        if repo_path == ".":
+            repo_path = str(Path(__file__).resolve().parent.parent)
         gs = git_status_info(repo_path)
         if gs:
             dirty_text = "[red]*[/]" if gs.dirty else ""
@@ -181,18 +215,17 @@ class JupyterHubTUI(App):
 
     def action_refresh(self) -> None:
         self._update_status()
+        self._populate_file_tree()
         self.notify("Status refreshed")
 
     def action_show_manual(self) -> None:
         # Load and render the cluster manual in the content area.
         manual_path = Path(__file__).resolve().parent.parent / "docs" / "manual.md"
         content = self.query_one("#content-area", Static)
-        if not manual_path:
+        if not manual_path.exists():
             content.update("[red]Manual not found at docs/manual.md[/]")
             return
         text = manual_path.read_text()
-        # ponytail: Static renders rich markup but not full markdown.
-        # Upgrade to Markdown widget if tables/code blocks need rendering.
         content.update(text)
 
     def action_launch_jupyter(self) -> None:
@@ -203,8 +236,9 @@ class JupyterHubTUI(App):
             return
         settings = cfg.jupyter_settings(self._data)
         port = settings.get("port", 8888)
+        remote_venv = cfg.remote_venv_path(self._data) or "~/.venv/icetop"
         self.notify(f"Launching Jupyter on {self._ssh.active.name}...")
-        launch(self._ssh, self._ssh.active.name, port)
+        launch(self._ssh, self._ssh.active.name, port, remote_venv)
         self.notify(f"Jupyter tunneling on localhost:{port}")
 
     def action_edit_node(self) -> None:
@@ -220,16 +254,18 @@ class JupyterHubTUI(App):
         self._ssh = SSHManager(self._data)
         self._populate_nodes()
         self._update_status()
+        self._populate_file_tree()
         self.notify("Node saved to config.json")
 
 
-class NodeEditScreen(Container):
+class NodeEditScreen(ModalScreen):
     # Modal screen for editing node connection details.
+
+    BINDINGS = [Binding("escape", "app.pop_screen", "Cancel", show=False)]
 
     DEFAULT_CSS = """
     NodeEditScreen {
         align: center middle;
-        layer: overlay;
     }
     #edit-dialog {
         width: 60;
@@ -247,21 +283,25 @@ class NodeEditScreen(Container):
     }
     #edit-dialog .row {
         height: 3;
-        align-horizontal: right;
     }
     #edit-dialog Button {
         margin: 0 1;
     }
+    #edit-dialog #edit-title {
+        width: 100%;
+        text-style: bold;
+        margin-bottom: 1;
+    }
     """
 
-    def __init__(self, node, data, on_save: object):
+    def __init__(self, node, data, on_save):
         super().__init__()
         self._node = node
         self._data = data
         self._on_save = on_save
 
     def compose(self) -> ComposeResult:
-        with Container(id="edit-dialog"):
+        with Vertical(id="edit-dialog"):
             yield Label(f"Edit Node: {self._node.name}", id="edit-title")
             with Horizontal(classes="row"):
                 yield Label("Host")
