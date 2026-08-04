@@ -75,14 +75,9 @@ class SSHManager:
         return " ".join(self.command(name))
 
     def launch(self, name: str) -> None:
-        # Launch an interactive ssh session in a new terminal.
+        # Spawn SSH in a new kitty window so the user gets an interactive terminal.
         cmd = self.command(name)
-        subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
+        subprocess.Popen(["kitty", *cmd])
 
 
 def _base_ssh_command() -> list[str]:

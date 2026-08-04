@@ -203,7 +203,7 @@ class JupyterHubTUI(App):
             self.action_connect_node(name)
 
     def action_connect_node(self, name: str) -> None:
-        # Set active node and display the SSH command.
+        # Set active node, show the command, and launch SSH in a new terminal.
         if name not in self._ssh.nodes:
             self.notify(f"Unknown node: {name}", severity="error")
             return
@@ -211,7 +211,8 @@ class JupyterHubTUI(App):
         self._update_status()
         cmd_display = self.query_one("#ssh-command-display", Label)
         cmd_display.update(f"[dim]$ {self._ssh.command_str(name)}[/]")
-        self.notify(f"Active node: {node.name} ({node.host})")
+        self._ssh.launch(name)
+        self.notify(f"Connecting to: {node.name} ({node.host})")
 
     def action_refresh(self) -> None:
         self._update_status()
