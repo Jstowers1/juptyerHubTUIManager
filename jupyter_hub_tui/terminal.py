@@ -70,7 +70,7 @@ def key_to_bytes(key: str, char: str | None) -> bytes:
 # Keys that escape the terminal during SSH.
 # Each maps to an app action name.
 ESCAPE_HATCH_KEYS = {
-    "ctrl+t": "cycle_focus",
+    "ctrl+t": "toggle_term_focus",
     "ctrl+r": "refresh",
     "ctrl+m": "show_manual",
     "ctrl+k": "setup_keys",

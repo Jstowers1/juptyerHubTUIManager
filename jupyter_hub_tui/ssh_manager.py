@@ -72,10 +72,7 @@ class SSHManager:
         ]
         if node.proxy and node.proxy in self._nodes:
             proxy = self._nodes[node.proxy]
-            cmd += [
-                "-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}",
-                "-o", f"ControlPath={_control_path(node.proxy)}",
-            ]
+            cmd += ["-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}"]
         return cmd
 
     def command(self, name: str) -> list[str]:
@@ -111,10 +108,7 @@ class SSHManager:
         cmd = ["ssh"]
         if node.proxy and node.proxy in self._nodes:
             proxy = self._nodes[node.proxy]
-            cmd += [
-                "-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}",
-                "-o", f"ControlPath={_control_path(node.proxy)}",
-            ]
+            cmd += ["-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}"]
         cmd += [
             "-o", f"ControlPath={_control_path(name)}",
             "-o", "ConnectTimeout=5",

@@ -64,9 +64,11 @@ Screen {
 #help-panel {
     display: none;
     height: 1fr;
+    max-height: 100%;
     background: $surface;
     padding: 0 1;
     overflow-y: auto;
+    border-top: solid $primary;
 }
 
 .node-list-label {
@@ -121,7 +123,7 @@ class JupyterHubTUI(App):
         Binding("ctrl+g", "git_picker", "Git Repo"),
         Binding("ctrl+b", "git_branch", "Git Branch"),
         Binding("ctrl+backslash", "toggle_sidebar", "Sidebar", priority=True),
-        Binding("ctrl+t", "cycle_focus", "Focus", priority=True),
+        Binding("ctrl+t", "toggle_term_focus", "Focus", priority=True),
         Binding("escape", "quit"),
         Binding("tab", "cycle_focus", show=False),
         Binding("1", "quick_connect(0)", show=False),
@@ -138,7 +140,7 @@ class JupyterHubTUI(App):
         yield Header()
         with Horizontal():
             with Vertical(id="left-panel"):
-                yield Static(self._help_text(), id="help-panel")
+                yield FocusableStatic(self._help_text(), id="help-panel")
                 yield Label("Cluster Nodes", classes="node-list-label")
                 yield ListView(id="node-list")
                 yield Label("", id="ssh-command-display")
@@ -210,15 +212,20 @@ class JupyterHubTUI(App):
         left.display = not left.display
         self._term._resize_pty()
 
+    def action_toggle_term_focus(self) -> None:
+        # Ctrl+T during SSH: toggle between terminal and sidebar.
+        # Disable terminal focus so Tab can't return to it.
+        if self.focused is self._term:
+            self._term.can_focus = False
+            self.query_one("#file-tree", Tree).focus()
+        else:
+            self._term.can_focus = True
+            self._term.focus()
+
     def action_cycle_focus(self) -> None:
-        # Ctrl+T: During SSH, toggle between terminal and file tree.
-        # Tab: In dashboard, toggle between left panel and content.
+        # Tab: Dashboard cycles left panel <-> content.
+        # During SSH, Tab does nothing (terminal swallows it).
         if self._term.pty_active:
-            tree = self.query_one("#file-tree", Tree)
-            if self.focused is tree:
-                self._term.focus()
-            else:
-                tree.focus()
             return
         focused = self.focused
         left = self.query_one("#left-panel")
@@ -395,16 +402,16 @@ class JupyterHubTUI(App):
         self._content.focus()
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
-        # Open .ipynb files from the file tree in euporie.
-        if event.tree.id != "file-tree":
+        if event.control.id != "file-tree":
             return
         node = event.node
-        if node is event.tree.root:
+        tree = event.control
+        if node is tree.root:
             return
         label = str(node.label)
         if not label.endswith(".ipynb"):
             return
-        root = event.tree.root
+        root = tree.root
         if not root.data:
             return
         labels = []
