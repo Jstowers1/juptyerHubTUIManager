@@ -144,6 +144,8 @@ class JupyterHubTUI(App):
         Binding("ctrl+t", "toggle_term_focus", "Focus"),
         Binding("ctrl+w", "close_tab", "Close Tab"),
         Binding("ctrl+o", "activate_venv", "Venv"),
+        Binding("ctrl+left", "prev_tab", "Prev Tab", show=False),
+        Binding("ctrl+right", "next_tab", "Next Tab", show=False),
         Binding("escape", "quit"),
         Binding("tab", "cycle_focus", show=False),
         Binding("1", "quick_connect(0)", show=False),
@@ -213,21 +215,29 @@ class JupyterHubTUI(App):
         hp.write("[cyan]Notebooks[/]")
         hp.write("  Enter        Open .ipynb in new tab (remote euporie)")
         hp.write("  Ctrl+W       Close current notebook tab")
+        hp.write("  Ctrl+Left    Previous tab")
+        hp.write("  Ctrl+Right   Next tab")
         hp.write("")
-        hp.write("[cyan]Euporie[/]")
-        hp.write("  Ctrl+E       Edit mode (write code)")
-        hp.write("  Esc          Command mode")
-        hp.write("  Shift+Enter  Run cell, select next")
+        hp.write("[cyan]Euporie (command mode)[/]")
+        hp.write("  Enter        Edit cell")
         hp.write("  Ctrl+Enter   Run cell in place")
+        hp.write("  Shift+Enter  Run cell, select next")
         hp.write("  Alt+Enter    Run cell, insert below")
-        hp.write("  Ctrl+S       Save notebook")
-        hp.write("  In cmd mode:")
-        hp.write("    a          Insert cell above")
-        hp.write("    b          Insert cell below")
-        hp.write("    dd         Delete cell")
-        hp.write("    m          Cell type: markdown")
-        hp.write("    y          Cell type: code")
-        hp.write("    k/j        Select up/down")
+        hp.write("  a            Insert cell above")
+        hp.write("  b            Insert cell below")
+        hp.write("  dd           Delete cell")
+        hp.write("  m            Cell to markdown")
+        hp.write("  y            Cell to code")
+        hp.write("  k / up       Select previous cell")
+        hp.write("  j / down     Select next cell")
+        hp.write("  z            Undelete cell")
+        hp.write("  x            Cut cell")
+        hp.write("  v            Paste cell")
+        hp.write("  Ctrl+\\       Split cell (at cursor)")
+        hp.write("  ii           Interrupt kernel")
+        hp.write("  00           Restart kernel")
+        hp.write("  Esc          Exit edit mode")
+        hp.write("  Alt+S        Save notebook")
         hp.write("")
         hp.write("[cyan]Config[/]")
         hp.write("  Ctrl+E       Edit active node")
@@ -396,6 +406,28 @@ class JupyterHubTUI(App):
         tabs.remove_pane(active)
         tabs.active = "terminal-tab"
         self._term.focus()
+
+    def action_prev_tab(self) -> None:
+        tabs = self.query_one("#term-tabs", TabbedContent)
+        if not tabs.display:
+            return
+        ids = [p.id for p in tabs.query(TabPane)]
+        if len(ids) <= 1:
+            return
+        i = ids.index(tabs.active) if tabs.active in ids else 0
+        tabs.active = ids[(i - 1) % len(ids)]
+        self._active_term().focus()
+
+    def action_next_tab(self) -> None:
+        tabs = self.query_one("#term-tabs", TabbedContent)
+        if not tabs.display:
+            return
+        ids = [p.id for p in tabs.query(TabPane)]
+        if len(ids) <= 1:
+            return
+        i = ids.index(tabs.active) if tabs.active in ids else 0
+        tabs.active = ids[(i + 1) % len(ids)]
+        self._active_term().focus()
 
     def action_cycle_focus(self) -> None:
         # Tab: Dashboard cycles left panel <-> content.
@@ -578,6 +610,7 @@ class JupyterHubTUI(App):
         tabs = self.query_one("#term-tabs", TabbedContent)
         term = TerminalDisplay()
         term.notebook_mode = True
+        term._overlay_text = "Loading notebook..."
         pane = TabPane(title, term, id=tab_id)
         tabs.add_pane(pane)
         self._nb_meta[tab_id] = {
