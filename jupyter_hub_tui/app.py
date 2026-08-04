@@ -12,6 +12,7 @@ from textual.widgets import Footer, Header, Static, ListView, ListItem, Label
 
 from . import config as cfg
 from . import venv
+from .git_status import status as git_status_info
 from .ssh_manager import SSHManager
 
 
@@ -129,7 +130,21 @@ class JupyterHubTUI(App):
         else:
             node_text = "[dim]NO CONNECTION[/]"
 
-        bar.update(f" {venv_icon}  {node_text}")
+        # Git branch and dirty state.
+        repo_path = str(Path(__file__).resolve().parent.parent)
+        gs = git_status_info(repo_path)
+        if gs:
+            dirty_text = "[red]*[/]" if gs.dirty else ""
+            ahead_behind = ""
+            if gs.ahead:
+                ahead_behind += f" +{gs.ahead}"
+            if gs.behind:
+                ahead_behind += f" -{gs.behind}"
+            git_text = f"  [blue]git:{gs.branch}{dirty_text}{ahead_behind}[/]"
+        else:
+            git_text = ""
+
+        bar.update(f" {venv_icon}  {node_text}{git_text}")
 
     def _render_welcome(self) -> None:
         content = self.query_one("#content-area", Static)
