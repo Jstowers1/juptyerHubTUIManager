@@ -65,3 +65,11 @@ def update_node(data: dict[str, Any], name: str, **fields: Any) -> dict[str, Any
         data["nodes"][name] = {}
     data["nodes"][name].update(fields)
     return data
+
+
+def set_git_repo_path(data: dict[str, Any], path: str) -> dict[str, Any]:
+    # Set git repo path in the data dict. Returns updated dict.
+    if "git" not in data:
+        data["git"] = {}
+    data["git"]["repo_path"] = path
+    return data

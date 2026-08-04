@@ -97,8 +97,8 @@ class JupyterHubTUI(App):
     TITLE = "Jupyter Hub TUI"
     CSS = CSS
 
-    # priority=True: fires before any widget. App-level escape hatches
-    # that must work during SSH sessions.
+    # priority=True fires before any widget can swallow the key.
+    # Digit/tab actions self-check is_running so they no-op during SSH.
     BINDINGS = [
         Binding("escape", "quit", "Quit", priority=True),
         Binding("ctrl+r", "refresh", "Refresh", priority=True),
@@ -107,6 +107,12 @@ class JupyterHubTUI(App):
         Binding("ctrl+j", "launch_jupyter", "Jupyter", priority=True),
         Binding("ctrl+k", "setup_keys", "SSH Keys", priority=True),
         Binding("ctrl+e", "edit_node", "Edit Node", priority=True),
+        Binding("ctrl+h", "show_help", "Help", priority=True),
+        Binding("ctrl+g", "git_picker", "Git Repo", priority=True),
+        Binding("tab", "cycle_focus", "Focus", priority=True),
+        Binding("1", "quick_connect(0)", show=False, priority=True),
+        Binding("2", "quick_connect(1)", show=False, priority=True),
+        Binding("3", "quick_connect(2)", show=False, priority=True),
     ]
 
     def __init__(self):
@@ -178,35 +184,71 @@ class JupyterHubTUI(App):
         content.display = True
         content.focus()
 
-    # --- Dashboard mode ---
-    # ListView is NOT auto-focused. Focus stays on content-area (Static).
-    # Static does not eat keys, so App.on_key fires and handles everything.
+    # --- Actions ---
 
-    def on_key(self, event) -> None:
-        # Ignore keys if terminal has focus (SSH session).
+    def action_quick_connect(self, idx: int) -> None:
+        # Number key quick-connect. No-op during SSH.
         if self._term.is_running:
             return
-        # Tab: toggle between node list and content.
-        if event.key == "tab":
-            self._cycle_focus()
-            event.prevent_default()
-            event.stop()
-            return
-        # Digits: quick-connect.
-        if event.character and event.character.isdigit():
-            idx = int(event.character) - 1
-            if 0 <= idx < len(self._node_names):
-                self._start_ssh(self._node_names[idx])
-                event.prevent_default()
-                event.stop()
+        if 0 <= idx < len(self._node_names):
+            self._start_ssh(self._node_names[idx])
 
-    def _cycle_focus(self) -> None:
+    def action_cycle_focus(self) -> None:
+        # Tab: toggle between node list and content. No-op during SSH.
+        if self._term.is_running:
+            return
         focused = self.focused
         left = self.query_one("#left-panel")
         if focused is not None and left in focused.ancestors_with_self:
             self.query_one("#content-area", Static).focus()
         else:
             self.query_one("#node-list", ListView).focus()
+
+    def action_show_help(self) -> None:
+        if self._term.is_running:
+            return
+        content = self.query_one("#content-area", Static)
+        content.display = True
+        self._term.display = False
+        content.update(self._help_text())
+        content.focus()
+
+    @staticmethod
+    def _help_text() -> str:
+        return "\n".join([
+            "[bold]Keybindings[/]",
+            "",
+            "[cyan]Navigation[/]",
+            "  Tab          Toggle focus between panels",
+            "  1-3          Quick-connect to node by index",
+            "  Ctrl+N       Return to dashboard from SSH",
+            "",
+            "[cyan]Cluster[/]",
+            "  Ctrl+K       Set up SSH keys (runs in terminal)",
+            "  Ctrl+M       View cluster manual",
+            "  Ctrl+R       Refresh status bar and file tree",
+            "",
+            "[cyan]Notebooks[/]",
+            "  Ctrl+J       Launch Jupyter via SSH tunnel + euporie",
+            "",
+            "[cyan]Config[/]",
+            "  Ctrl+E       Edit active node details",
+            "  Ctrl+G       Pick git repo path (saved to config)",
+            "  Ctrl+H       Show this help screen",
+            "",
+            "  Esc          Quit",
+        ])
+
+    def action_git_picker(self) -> None:
+        if self._term.is_running:
+            return
+        self.push_screen(GitPickerScreen(self._data, self._on_git_saved))
+
+    def _on_git_saved(self) -> None:
+        self._data = cfg.load()
+        self._populate_file_tree()
+        self._update_status()
+        self.notify("Git repo path saved")
 
     def action_connect_node(self, name: str) -> None:
         self._start_ssh(name)
@@ -411,6 +453,109 @@ class NodeEditScreen(ModalScreen):
             proxy = self.query_one("#edit-proxy", Input).value or None
             cfg.update_node(self._data, self._node.name,
                             host=host, user=user, port=port, proxy=proxy)
+            cfg.save(self._data)
+            self.app.pop_screen()
+            self._on_save()
+
+
+class GitPickerScreen(ModalScreen):
+    # Pick a directory from the filesystem. Saves to config.git.repo_path.
+
+    BINDINGS = [Binding("escape", "app.pop_screen", "Cancel", show=False)]
+
+    DEFAULT_CSS = """
+    GitPickerScreen {
+        align: center middle;
+    }
+    #git-dialog {
+        width: 70;
+        height: auto;
+        max-height: 80%;
+        border: solid $primary;
+        background: $surface;
+        padding: 1 2;
+    }
+    #git-dialog #dir-tree {
+        height: 15;
+    }
+    #git-dialog #current-path {
+        color: $text-muted;
+        margin-bottom: 1;
+    }
+    #git-dialog Input {
+        margin-bottom: 1;
+    }
+    #git-dialog Button {
+        margin: 0 1;
+    }
+    """
+
+    def __init__(self, data, on_save):
+        super().__init__()
+        self._data = data
+        self._on_save = on_save
+        self._current = Path.home()
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="git-dialog"):
+            yield Label("Pick Git Repo Path", id="edit-title")
+            yield Label(str(self._current), id="current-path")
+            tree = Tree(str(self._current), id="dir-tree")
+            yield tree
+            yield Input(value=str(self._current), id="git-path-input")
+            with Horizontal():
+                yield Button("Save", id="git-save", variant="success")
+                yield Button("Cancel", id="git-cancel", variant="error")
+
+    def on_mount(self) -> None:
+        self._populate_tree()
+
+    def _populate_tree(self) -> None:
+        tree = self.query_one("#dir-tree", Tree)
+        tree.clear()
+        try:
+            entries = sorted(
+                self._current.iterdir(),
+                key=lambda p: (not p.is_dir(), p.name.lower()),
+            )
+        except PermissionError:
+            return
+        for entry in entries:
+            if entry.name.startswith("."):
+                continue
+            if entry.is_dir():
+                tree.root.add(entry.name, allow_expand=True)
+
+    def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
+        # Lazy-load subdirectories.
+        path = self._current / str(event.node.label)
+        try:
+            entries = sorted(
+                path.iterdir(),
+                key=lambda p: (not p.is_dir(), p.name.lower()),
+            )
+        except (PermissionError, NotADirectoryError):
+            return
+        event.node.allow_expand = False
+        for entry in entries:
+            if entry.name.startswith("."):
+                continue
+            if entry.is_dir():
+                event.node.add(entry.name, allow_expand=True)
+
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        path = self._current / str(event.node.label)
+        self._current = path
+        self.query_one("#current-path", Label).update(str(path))
+        self.query_one("#git-path-input", Input).value = str(path)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "git-cancel":
+            self.app.pop_screen()
+            return
+        if event.button.id == "git-save":
+            path = self.query_one("#git-path-input", Input).value
+            cfg.set_git_repo_path(self._data, path)
             cfg.save(self._data)
             self.app.pop_screen()
             self._on_save()
