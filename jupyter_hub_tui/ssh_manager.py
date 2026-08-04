@@ -60,30 +60,20 @@ class SSHManager:
         return node
 
     def raw_ssh_command(self, name: str) -> list[str]:
-        # Plain ssh without kitty wrapper. For embedded terminal.
-        # ControlMaster lets _ssh_prefix commands reuse this connection.
-        # Wrapped in bash with ssh-agent so key passphrase is asked once.
+        # Plain ssh for embedded terminal. ssh-agent started by jhtui
+        # launcher handles passphrase (one per session).
         node = self._nodes[name]
-        ssh_args = [
+        cmd = [
             "ssh", "-tt",
             "-o", "ControlMaster=auto",
             "-o", f"ControlPath={_control_path(name)}",
-            "-o", "ControlPersist=60",
+            "-o", "ControlPersist=no",
             f"{node.user}@{node.host}", "-p", str(node.port),
         ]
         if node.proxy and node.proxy in self._nodes:
             proxy = self._nodes[node.proxy]
-            ssh_args += ["-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}"]
-        ssh_str = " ".join(ssh_args)
-        # ssh-agent + ssh-add asks for passphrase once. Proxy and target
-        # connections all reuse the agent, no triple-prompt.
-        script = (
-            f"eval $(ssh-agent -s) >/dev/null 2>&1; "
-            "ssh-add ~/.ssh/id_ed25519; "
-            f"trap 'kill $SSH_AGENT_PID' EXIT; "
-            f"{ssh_str}"
-        )
-        return ["bash", "-c", script]
+            cmd += ["-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}"]
+        return cmd
 
     def command(self, name: str) -> list[str]:
         # Build the ssh command for a node. Uses kitty +kitten ssh when available
@@ -334,12 +324,11 @@ def _self_check() -> None:
     cmd = mgr.command("worker-1")
     assert "-J" in cmd, f"proxy jump missing: {cmd}"
     raw = mgr.raw_ssh_command("worker-1")
-    raw_str = " ".join(raw)
-    assert raw[0] == "bash", f"raw command should start with bash wrapper: {raw}"
-    assert "ProxyJump" in raw_str, "ProxyJump missing from raw"
-    assert "ControlMaster" in raw_str, "ControlMaster missing"
-    assert "tui-ssh-worker-1" in raw_str, "per-node ControlPath missing"
-    assert "ssh-agent" in raw_str, "ssh-agent wrapper missing"
+    assert raw[0] == "ssh", f"raw should start with ssh: {raw}"
+    assert "ProxyJump" in " ".join(raw), "ProxyJump missing from raw"
+    assert "ControlMaster" in " ".join(raw), "ControlMaster missing"
+    assert "tui-ssh-worker-1" in " ".join(raw), "per-node ControlPath missing"
+    assert "ControlPersist=no" in " ".join(raw), "ControlPersist should be no"
     assert hasattr(mgr, "scp_file"), "scp_file missing"
     assert hasattr(mgr, "scp_upload"), "scp_upload missing"
     assert not hasattr(mgr, "setup_keys"), "blocking setup_keys should be deleted"

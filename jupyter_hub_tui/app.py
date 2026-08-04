@@ -59,6 +59,15 @@ Screen {
     height: 1fr;
 }
 
+#term-tabs ContentTabs {
+    dock: bottom;
+    background: $panel;
+}
+
+#term-tabs TabPane {
+    height: 1fr;
+}
+
 #term-tabs TerminalDisplay {
     height: 1fr;
     background: #1d1f21;

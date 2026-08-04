@@ -171,7 +171,8 @@ class TerminalDisplay(Widget):
         self._screen.resize(h, w)
         self._pid, self._master_fd = pty.fork()
         if self._pid == 0:
-            os.setsid()
+            # pty.fork already calls setsid and sets controlling tty.
+            # Do NOT call setsid again or ssh-add loses /dev/tty.
             winsize = struct.pack("HHHH", h, w, 0, 0)
             try:
                 fcntl.ioctl(1, termios.TIOCSWINSZ, winsize)
