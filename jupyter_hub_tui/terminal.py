@@ -53,7 +53,7 @@ def key_to_bytes(key: str, char: str | None) -> bytes:
 class TerminalDisplay(Widget):
     # Renders a pyte screen as Textual content.
 
-    can_focus = True
+    can_focus = False
 
     DEFAULT_CSS = """
     TerminalDisplay {
