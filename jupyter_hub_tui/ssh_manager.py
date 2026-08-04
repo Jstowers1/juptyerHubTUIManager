@@ -131,6 +131,34 @@ class SSHManager:
             return None
         return result.stdout.strip() or None
 
+    def remote_git_branches(self, name: str, path: str) -> list[str]:
+        # List branches on remote. Returns [branch_name, ...].
+        cmd = self._ssh_prefix(name) + [
+            "-o", "ConnectTimeout=5",
+            "-o", "BatchMode=yes",
+            f"git -C {path} branch --format='%(refname:short)' 2>/dev/null",
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return []
+        if result.returncode != 0:
+            return []
+        return [b.strip().strip("'") for b in result.stdout.strip().splitlines() if b.strip()]
+
+    def remote_git_checkout(self, name: str, path: str, branch: str) -> bool:
+        # Checkout a branch on remote. Returns True on success.
+        cmd = self._ssh_prefix(name) + [
+            "-o", "ConnectTimeout=5",
+            "-o", "BatchMode=yes",
+            f"git -C {path} checkout {branch} 2>&1",
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False
+        return result.returncode == 0
+
     def setup_keys_command(self) -> list[str]:
         # Return a shell command that generates a key and copies it to all nodes.
         # Runs in the embedded terminal so the user can enter passwords.

@@ -114,7 +114,10 @@ class JupyterHubTUI(App):
         Binding("ctrl+e", "edit_node", "Edit Node", priority=True),
         Binding("ctrl+h", "show_help", "Help", priority=True),
         Binding("ctrl+g", "git_picker", "Git Repo", priority=True),
-        Binding("escape", "quit", "Quit"),
+        Binding("ctrl+t", "cycle_focus", "Focus", priority=True),
+        Binding("ctrl+b", "git_branch", "Git Branch", priority=True),
+        Binding("ctrl+o", "git_checkout", "Git Checkout", priority=True),
+        Binding("escape", "quit"),
         Binding("tab", "cycle_focus", show=False),
         Binding("1", "quick_connect(0)", show=False),
         Binding("2", "quick_connect(1)", show=False),
@@ -199,15 +202,24 @@ class JupyterHubTUI(App):
             self._start_ssh(self._node_names[idx])
 
     def action_cycle_focus(self) -> None:
+        # Ctrl+T (priority): toggles between terminal and file tree.
+        # Tab (non-priority): toggles between panels in dashboard mode.
+        if self._term.pty_active:
+            tree = self.query_one("#file-tree", Tree)
+            if self.focused is tree:
+                self._term.focus()
+            else:
+                tree.focus()
+            return
         focused = self.focused
         left = self.query_one("#left-panel")
         if focused is not None and left in focused.ancestors_with_self:
-            self.query_one("#content-area", Static).focus()
+            self._content.focus()
         else:
             self.query_one("#node-list", ListView).focus()
 
     def action_show_help(self) -> None:
-        if self._term.is_running:
+        if self._term.pty_active:
             return
         self._content.display = True
         self._term.display = False
@@ -221,6 +233,7 @@ class JupyterHubTUI(App):
             "",
             "[cyan]Navigation[/]",
             "  Tab          Toggle focus between panels",
+            "  Ctrl+T       Toggle terminal / file tree during SSH",
             "  1-3          Quick-connect to node by index",
             "  Ctrl+N       Return to dashboard from SSH",
             "",
@@ -232,24 +245,52 @@ class JupyterHubTUI(App):
             "[cyan]Notebooks[/]",
             "  Ctrl+J       Launch Jupyter via SSH tunnel + euporie",
             "",
+            "[cyan]Git[/]",
+            "  Ctrl+G       Pick git repo path on remote (saved to config)",
+            "  Ctrl+B       Show branches and current branch",
+            "  Ctrl+O       Checkout a branch",
+            "",
             "[cyan]Config[/]",
             "  Ctrl+E       Edit active node details",
-            "  Ctrl+G       Pick git repo path (saved to config)",
             "  Ctrl+H       Show this help screen",
             "",
             "  Esc          Quit",
         ])
 
     def action_git_picker(self) -> None:
-        if self._term.is_running:
+        if self._term.pty_active:
             return
-        self.push_screen(GitPickerScreen(self._data, self._on_git_saved))
+        self.push_screen(GitPickerScreen(self._data, self._ssh, self._on_git_saved))
 
     def _on_git_saved(self) -> None:
         self._data = cfg.load()
         self._populate_file_tree()
         self._update_status()
         self.notify("Git repo path saved")
+
+    def action_git_branch(self) -> None:
+        if not self._ssh.active:
+            self.notify("No active node.", severity="warning")
+            return
+        repo_path = cfg.git_repo_path(self._data)
+        if repo_path == ".":
+            self.notify("Set git repo path first (Ctrl+G).", severity="warning")
+            return
+        self.push_screen(GitBranchScreen(self._ssh, repo_path, self._on_git_action))
+
+    def action_git_checkout(self) -> None:
+        if not self._ssh.active:
+            self.notify("No active node.", severity="warning")
+            return
+        repo_path = cfg.git_repo_path(self._data)
+        if repo_path == ".":
+            self.notify("Set git repo path first (Ctrl+G).", severity="warning")
+            return
+        self.push_screen(GitCheckoutScreen(self._ssh, repo_path, self._on_git_action))
+
+    def _on_git_action(self) -> None:
+        self._update_status()
+        self._populate_file_tree()
 
     def action_connect_node(self, name: str) -> None:
         self._start_ssh(name)
@@ -483,7 +524,7 @@ class NodeEditScreen(ModalScreen):
 
 
 class GitPickerScreen(ModalScreen):
-    # Pick a directory from the filesystem. Saves to config.git.repo_path.
+    # Pick a directory on the REMOTE filesystem. Saves to config.git.repo_path.
 
     BINDINGS = [Binding("escape", "app.pop_screen", "Cancel", show=False)]
 
@@ -514,19 +555,21 @@ class GitPickerScreen(ModalScreen):
     }
     """
 
-    def __init__(self, data, on_save):
+    def __init__(self, data, ssh, on_save):
         super().__init__()
         self._data = data
+        self._ssh = ssh
         self._on_save = on_save
-        self._current = Path.home()
+        self._current = "~"
+        self._node = ssh.active.name if ssh.active else None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="git-dialog"):
-            yield Label("Pick Git Repo Path", id="edit-title")
-            yield Label(str(self._current), id="current-path")
-            tree = Tree(str(self._current), id="dir-tree")
+            yield Label("Pick Git Repo Path (Remote)", id="edit-title")
+            yield Label(self._current, id="current-path")
+            tree = Tree(self._current, id="dir-tree")
             yield tree
-            yield Input(value=str(self._current), id="git-path-input")
+            yield Input(value=self._current, id="git-path-input")
             with Horizontal():
                 yield Button("Save", id="git-save", variant="success")
                 yield Button("Cancel", id="git-cancel", variant="error")
@@ -537,41 +580,52 @@ class GitPickerScreen(ModalScreen):
     def _populate_tree(self) -> None:
         tree = self.query_one("#dir-tree", Tree)
         tree.clear()
-        try:
-            entries = sorted(
-                self._current.iterdir(),
-                key=lambda p: (not p.is_dir(), p.name.lower()),
-            )
-        except PermissionError:
+        tree.root.set_label(self._current)
+        if not self._node:
+            tree.root.add_leaf("[red]No active SSH connection[/]")
             return
-        for entry in entries:
-            if entry.name.startswith("."):
-                continue
-            if entry.is_dir():
-                tree.root.add(entry.name, allow_expand=True)
+        try:
+            entries = self._ssh.list_remote_dir(self._node, self._current)
+        except Exception:
+            tree.root.add_leaf("[red]SSH connection failed[/]")
+            return
+        for e in entries:
+            if e["is_dir"]:
+                tree.root.add(e["name"], allow_expand=True)
+        tree.root.expand()
 
     def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
-        # Lazy-load subdirectories.
-        path = self._current / str(event.node.label)
-        try:
-            entries = sorted(
-                path.iterdir(),
-                key=lambda p: (not p.is_dir(), p.name.lower()),
-            )
-        except (PermissionError, NotADirectoryError):
+        if event.node is self.query_one("#dir-tree", Tree).root:
             return
-        event.node.allow_expand = False
-        for entry in entries:
-            if entry.name.startswith("."):
-                continue
-            if entry.is_dir():
-                event.node.add(entry.name, allow_expand=True)
+        tree = self.query_one("#dir-tree", Tree)
+        labels = []
+        cur = event.node
+        while cur is not None and cur is not tree.root:
+            labels.append(str(cur.label))
+            cur = cur.parent
+        labels.reverse()
+        full_path = self._current + "/" + "/".join(labels)
+        try:
+            entries = self._ssh.list_remote_dir(self._node, full_path)
+        except Exception:
+            return
+        for e in entries:
+            if e["is_dir"]:
+                event.node.add(e["name"], allow_expand=True)
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
-        path = self._current / str(event.node.label)
-        self._current = path
-        self.query_one("#current-path", Label).update(str(path))
-        self.query_one("#git-path-input", Input).value = str(path)
+        tree = self.query_one("#dir-tree", Tree)
+        if event.node is tree.root:
+            return
+        labels = []
+        cur = event.node
+        while cur is not None and cur is not tree.root:
+            labels.append(str(cur.label))
+            cur = cur.parent
+        labels.reverse()
+        self._current = self._current + "/" + "/".join(labels)
+        self.query_one("#current-path", Label).update(self._current)
+        self.query_one("#git-path-input", Input).value = self._current
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "git-cancel":
@@ -583,6 +637,113 @@ class GitPickerScreen(ModalScreen):
             cfg.save(self._data)
             self.app.pop_screen()
             self._on_save()
+
+
+class GitBranchScreen(ModalScreen):
+    # Show branches on remote git repo. Highlights current branch.
+
+    BINDINGS = [Binding("escape", "app.pop_screen", "Close", show=False)]
+
+    DEFAULT_CSS = """
+    GitBranchScreen {
+        align: center middle;
+    }
+    #branch-dialog {
+        width: 60;
+        height: auto;
+        max-height: 70%;
+        border: solid $primary;
+        background: $surface;
+        padding: 1 2;
+    }
+    #branch-dialog ListView {
+        height: 1fr;
+        max-height: 15;
+    }
+    """
+
+    def __init__(self, ssh, repo_path, on_close):
+        super().__init__()
+        self._ssh = ssh
+        self._repo = repo_path
+        self._on_close = on_close
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="branch-dialog"):
+            yield Label(f"Branches: {self._repo}", id="branch-title")
+            yield ListView(id="branch-list")
+
+    def on_mount(self) -> None:
+        node = self._ssh.active.name
+        branches = self._ssh.remote_git_branches(node, self._repo)
+        lv = self.query_one("#branch-list", ListView)
+        for b in branches:
+            prefix = "[green]*[/] " if b.startswith("*") else "   "
+            item = ListItem(Label(f"{prefix}{b}"))
+            item.data = b
+            lv.append(item)
+        if not branches:
+            lv.append(ListItem(Label("[red]No branches or not a git repo[/]")))
+
+
+class GitCheckoutScreen(ModalScreen):
+    # Pick a branch to checkout on remote git repo.
+
+    BINDINGS = [Binding("escape", "app.pop_screen", "Cancel", show=False)]
+
+    DEFAULT_CSS = """
+    GitCheckoutScreen {
+        align: center middle;
+    }
+    #checkout-dialog {
+        width: 60;
+        height: auto;
+        max-height: 70%;
+        border: solid $primary;
+        background: $surface;
+        padding: 1 2;
+    }
+    #checkout-dialog ListView {
+        height: 1fr;
+        max-height: 15;
+    }
+    """
+
+    def __init__(self, ssh, repo_path, on_close):
+        super().__init__()
+        self._ssh = ssh
+        self._repo = repo_path
+        self._on_close = on_close
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="checkout-dialog"):
+            yield Label(f"Checkout branch: {self._repo}", id="checkout-title")
+            yield ListView(id="checkout-list")
+
+    def on_mount(self) -> None:
+        node = self._ssh.active.name
+        self._branches = self._ssh.remote_git_branches(node, self._repo)
+        lv = self.query_one("#checkout-list", ListView)
+        for b in self._branches:
+            prefix = "[green]*[/] " if b.startswith("*") else "    "
+            item = ListItem(Label(f"{prefix}{b}"))
+            item.data = b
+            lv.append(item)
+        if not self._branches:
+            lv.append(ListItem(Label("[red]No branches or not a git repo[/]")))
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        branch = event.item.data
+        if not branch:
+            return
+        node = self._ssh.active.name
+        ok = self._ssh.remote_git_checkout(node, self._repo, branch)
+        if ok:
+            self.app.pop_screen()
+            self._on_close()
+            self.app.notify(f"Checked out {branch}")
+        else:
+            self.app.notify(f"Checkout failed for {branch}", severity="error")
 
 
 def main() -> None:
