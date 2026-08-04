@@ -47,11 +47,8 @@ route through pub automatically via SSH `ProxyJump`.
 
 ## Notes
 
-- Run inside tmux for SSH sessions in split panes. The TUI detects `$TMUX`
-  and uses `tmux split-window` for connections. Outside tmux, opens a new
-  kitty window.
+- SSH sessions run in an embedded terminal in the right panel. No tmux or
+  separate windows needed. Password prompts work inline.
 - Run inside kitty for inline notebook graphics via euporie.
-- The SSH manager auto-detects kitty and uses `kitty +kitten ssh` to copy
-  terminfo to the remote host.
 - Press `k` to generate an ed25519 key (if none exists) and copy it to all
   configured nodes via `ssh-copy-id`.

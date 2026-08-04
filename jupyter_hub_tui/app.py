@@ -18,6 +18,7 @@ from . import config as cfg
 from . import venv
 from .git_status import status as git_status_info
 from .ssh_manager import SSHManager
+from .terminal import TerminalDisplay
 
 
 CSS = """
@@ -102,6 +103,7 @@ class JupyterHubTUI(App):
         super().__init__()
         self._data = cfg.load()
         self._ssh = SSHManager(self._data)
+        self._term_widget: TerminalDisplay | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -204,7 +206,7 @@ class JupyterHubTUI(App):
             self.action_connect_node(name)
 
     def action_connect_node(self, name: str) -> None:
-        # Set active node, show the command, and launch SSH in a new terminal.
+        # Connect to a node in the embedded terminal.
         if name not in self._ssh.nodes:
             self.notify(f"Unknown node: {name}", severity="error")
             return
@@ -212,7 +214,19 @@ class JupyterHubTUI(App):
         self._update_status()
         cmd_display = self.query_one("#ssh-command-display", Label)
         cmd_display.update(f"[dim]$ {self._ssh.command_str(name)}[/]")
-        self._ssh.launch(name)
+        # Stop any existing terminal session.
+        old = self.query_one("#content-area", Static)
+        old.display = False
+        if self._term_widget is not None:
+            self._term_widget.stop()
+            self._term_widget.remove()
+            self._term_widget = None
+        # Start the embedded terminal.
+        self._term_widget = TerminalDisplay(id="term-display")
+        self.query_one("#right-panel").mount(self._term_widget)
+        cmd = self._ssh.launch(name)
+        self._term_widget.start(cmd)
+        self._term_widget.focus()
         self.notify(f"Connecting to: {node.name} ({node.host})")
 
     def action_refresh(self) -> None:

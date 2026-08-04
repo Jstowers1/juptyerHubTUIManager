@@ -55,9 +55,9 @@ class SSHManager:
         return node
 
     def raw_ssh_command(self, name: str) -> list[str]:
-        # Plain ssh without kitty wrapper. For tmux panes.
+        # Plain ssh without kitty wrapper. For embedded terminal and tmux.
         node = self._nodes[name]
-        cmd = ["ssh", f"{node.user}@{node.host}", "-p", str(node.port)]
+        cmd = ["ssh", "-tt", f"{node.user}@{node.host}", "-p", str(node.port)]
         if node.proxy and node.proxy in self._nodes:
             proxy = self._nodes[node.proxy]
             cmd += ["-J", f"{proxy.user}@{proxy.host}:{proxy.port}"]
@@ -84,19 +84,9 @@ class SSHManager:
     def command_str(self, name: str) -> str:
         return " ".join(self.command(name))
 
-    def launch(self, name: str) -> None:
-        # Split a tmux pane if inside tmux, otherwise spawn a kitty window.
-        if os.environ.get("TMUX"):
-            self._launch_tmux(name)
-        else:
-            cmd = self.command(name)
-            subprocess.Popen(["kitty", *cmd])
-
-    def _launch_tmux(self, name: str) -> None:
-        # Split current tmux window and run SSH in the new pane.
-        cmd = self.raw_ssh_command(name)
-        # ponytail: -h splits right, -p 40 gives SSH 40% of width.
-        subprocess.run(["tmux", "split-window", "-h", "-p", "40", *cmd])
+    def launch(self, name: str) -> list[str]:
+        # Return the raw SSH command for the embedded terminal to run.
+        return self.raw_ssh_command(name)
 
     def setup_keys(self, name: str | None = None) -> list[str]:
         # Generate an SSH key if none exists, then copy to target nodes.
