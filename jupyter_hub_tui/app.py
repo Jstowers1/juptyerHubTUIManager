@@ -9,6 +9,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Footer, Header, Static, ListView, ListItem, Label
+from textual.widgets import Markdown
 
 from . import config as cfg
 from . import venv
@@ -89,6 +90,7 @@ class JupyterHubTUI(App):
         Binding("1", "connect_node('pub')", "Pub", show=False),
         Binding("2", "connect_node('cobalt')", "Cobalt", show=False),
         Binding("3", "connect_node('npx-submitter')", "NPX", show=False),
+        Binding("m", "show_manual", "Manual"),
     ]
 
     def __init__(self):
@@ -176,6 +178,18 @@ class JupyterHubTUI(App):
     def action_refresh(self) -> None:
         self._update_status()
         self.notify("Status refreshed")
+
+    def action_show_manual(self) -> None:
+        # Load and render the cluster manual in the content area.
+        manual_path = Path(__file__).resolve().parent.parent / "docs" / "manual.md"
+        content = self.query_one("#content-area", Static)
+        if not manual_path:
+            content.update("[red]Manual not found at docs/manual.md[/]")
+            return
+        text = manual_path.read_text()
+        # ponytail: Static renders rich markup but not full markdown.
+        # Upgrade to Markdown widget if tables/code blocks need rendering.
+        content.update(text)
 
 
 def main() -> None:
