@@ -267,14 +267,14 @@ class JupyterHubTUI(App):
             return
         repo_path = cfg.git_repo_path(self._data)
         file_entries = await loop.run_in_executor(
-            None, self._fetch_file_entries, active.name, repo_path)
+            None, self._fetch_file_entries, active.name)
         status_info = await loop.run_in_executor(
             None, self._fetch_status_info, active.name, repo_path)
         self._apply_file_tree(file_entries)
         self._apply_status_bar(status_info)
 
-    def _fetch_file_entries(self, node_name: str, repo_path: str) -> list[dict]:
-        browse = repo_path if repo_path != "." else "~"
+    def _fetch_file_entries(self, node_name: str) -> list[dict]:
+        browse = cfg.browse_path(self._data)
         try:
             return self._ssh.list_remote_dir(node_name, browse)
         except Exception:
@@ -295,10 +295,9 @@ class JupyterHubTUI(App):
             return
         tree = self.query_one("#file-tree", Tree)
         tree.clear()
-        repo_path = cfg.git_repo_path(self._data)
-        browse_path = repo_path if repo_path != "." else "~"
-        tree.root.set_label(f"{active.name}:{browse_path}")
-        tree.root.data = {"node": active.name, "path": browse_path}
+        browse = cfg.browse_path(self._data)
+        tree.root.set_label(f"{active.name}:{browse}")
+        tree.root.data = {"node": active.name, "path": browse}
         if not entries:
             tree.root.add_leaf("[dim](empty)[/]")
         for e in entries:
@@ -461,13 +460,11 @@ class JupyterHubTUI(App):
         if not active:
             tree.root.add_leaf("[dim]Connect to browse files[/]")
             return
-        repo_path = cfg.git_repo_path(self._data)
-        # Browse the git repo path if set, else home dir.
-        browse_path = repo_path if repo_path != "." else "~"
-        tree.root.set_label(f"{active.name}:{browse_path}")
-        tree.root.data = {"node": active.name, "path": browse_path}
+        browse = cfg.browse_path(self._data)
+        tree.root.set_label(f"{active.name}:{browse}")
+        tree.root.data = {"node": active.name, "path": browse}
         try:
-            entries = self._ssh.list_remote_dir(active.name, browse_path)
+            entries = self._ssh.list_remote_dir(active.name, browse)
         except Exception:
             tree.root.add_leaf("[red]SSH connection failed[/]")
             return
@@ -485,6 +482,8 @@ class JupyterHubTUI(App):
         root = tree.root
         if not root.data:
             return
+        if len(node.children) > 0:
+            node.remove_children()
         labels = []
         cur = node
         while cur is not None and cur is not root:

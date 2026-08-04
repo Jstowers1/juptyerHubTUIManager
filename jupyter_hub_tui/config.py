@@ -47,6 +47,10 @@ def git_repo_path(data: dict[str, Any]) -> str:
     return data.get("git", {}).get("repo_path", ".")
 
 
+def browse_path(data: dict[str, Any]) -> str:
+    return data.get("browse_path", "~")
+
+
 def jupyter_settings(data: dict[str, Any]) -> dict[str, Any]:
     return data.get("jupyter", {})
 

@@ -113,9 +113,14 @@ class SSHManager:
         return result.returncode == 0 and "ok" in result.stdout
 
     def list_remote_dir(self, name: str, path: str = "~") -> list[dict]:
-        remote_path = os.path.expanduser(path) if path.startswith("~") else path
+        if path == "~":
+            quoted = "~"
+        elif path.startswith("~/"):
+            quoted = "~/" + shlex.quote(path[2:])
+        else:
+            quoted = shlex.quote(path)
         cmd = self._ssh_prefix(name) + [
-            f"ls -1F {shlex.quote(remote_path)} 2>/dev/null",
+            f"ls -1F {quoted} 2>/dev/null",
         ]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)

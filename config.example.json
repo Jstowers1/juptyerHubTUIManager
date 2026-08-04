@@ -22,8 +22,9 @@
     }
   },
   "git": {
-    "repo_path": "."
+    "repo_path": "/home/youruser/icetop-cnn"
   },
+  "browse_path": "~",
   "jupyter": {
     "port": 8888
   },
