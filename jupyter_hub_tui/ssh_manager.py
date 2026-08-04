@@ -118,12 +118,12 @@ class SSHManager:
         return cmd
 
     def check_master(self, name: str) -> bool:
-        # Check if ControlMaster socket for this node is alive.
         node = self._nodes[name]
         cmd = [
             "ssh",
             "-o", f"ControlPath={_control_path(name)}",
             "-O", "check",
+            "-p", str(node.port),
             f"{node.user}@{node.host}",
         ]
         try:
@@ -134,7 +134,6 @@ class SSHManager:
 
     def list_remote_dir(self, name: str, path: str = "~") -> list[dict]:
         cmd = self._ssh_prefix(name) + [
-            "-o", "ConnectTimeout=5",
             f"ls -1F {shlex.quote(path)} 2>/dev/null",
         ]
         try:
@@ -153,7 +152,6 @@ class SSHManager:
     def remote_git_status(self, name: str, path: str) -> str | None:
         # Run git status on remote. Returns porcelain output or None.
         cmd = self._ssh_prefix(name) + [
-            "-o", "ConnectTimeout=5",
             f"git -C {shlex.quote(path)} status --porcelain=v1 -b 2>/dev/null",
         ]
         try:
@@ -167,7 +165,6 @@ class SSHManager:
     def remote_git_log(self, name: str, path: str, count: int = 10) -> str:
         # Return recent commit log from remote.
         cmd = self._ssh_prefix(name) + [
-            "-o", "ConnectTimeout=5",
             f"git -C {shlex.quote(path)} log --oneline -{count} 2>/dev/null",
         ]
         try:
@@ -178,7 +175,6 @@ class SSHManager:
 
     def remote_git_fetch(self, name: str, path: str) -> bool:
         cmd = self._ssh_prefix(name) + [
-            "-o", "ConnectTimeout=10",
             f"git -C {shlex.quote(path)} fetch 2>&1",
         ]
         try:
@@ -189,7 +185,6 @@ class SSHManager:
 
     def remote_git_pull(self, name: str, path: str) -> tuple[bool, str]:
         cmd = self._ssh_prefix(name) + [
-            "-o", "ConnectTimeout=10",
             f"git -C {shlex.quote(path)} pull 2>&1",
         ]
         try:
@@ -200,7 +195,6 @@ class SSHManager:
 
     def remote_git_diff(self, name: str, path: str) -> str:
         cmd = self._ssh_prefix(name) + [
-            "-o", "ConnectTimeout=5",
             f"git -C {shlex.quote(path)} diff 2>/dev/null",
         ]
         try:
@@ -210,9 +204,7 @@ class SSHManager:
         return result.stdout.strip()
 
     def remote_git_branches(self, name: str, path: str) -> list[str]:
-        # List branches on remote. Returns [branch_name, ...].
         cmd = self._ssh_prefix(name) + [
-            "-o", "ConnectTimeout=5",
             f"git -C {shlex.quote(path)} branch --format='%(refname:short)' 2>/dev/null",
         ]
         try:
@@ -224,9 +216,7 @@ class SSHManager:
         return [b.strip().strip("'") for b in result.stdout.strip().splitlines() if b.strip()]
 
     def remote_git_checkout(self, name: str, path: str, branch: str) -> bool:
-        # Checkout a branch on remote. Returns True on success.
         cmd = self._ssh_prefix(name) + [
-            "-o", "ConnectTimeout=5",
             f"git -C {shlex.quote(path)} checkout {shlex.quote(branch)} 2>&1",
         ]
         try:
@@ -234,19 +224,6 @@ class SSHManager:
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return False
         return result.returncode == 0
-
-    def remote_venv_active(self, name: str, venv_path: str) -> bool:
-        # Check if remote venv exists.
-        if not venv_path:
-            return False
-        cmd = self._ssh_prefix(name) + [
-            f"test -d {shlex.quote(venv_path)}/bin && echo yes 2>/dev/null",
-        ]
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            return False
-        return "yes" in result.stdout
 
     def scp_file(self, name: str, remote_path: str, local_path: str) -> bool:
         # Download a file from remote to local via scp.

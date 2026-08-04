@@ -285,20 +285,13 @@ class JupyterHubTUI(App):
             return []
 
     def _fetch_status_info(self, node_name: str, repo_path: str) -> dict:
-        remote_venv = cfg.remote_venv_path(self._data)
-        venv_on = False
-        if remote_venv:
-            try:
-                venv_on = self._ssh.remote_venv_active(node_name, remote_venv)
-            except Exception:
-                pass
         git_porcelain = ""
         if repo_path != ".":
             try:
                 git_porcelain = self._ssh.remote_git_status(node_name, repo_path)
             except Exception:
                 pass
-        return {"venv_on": venv_on, "git_porcelain": git_porcelain}
+        return {"git_porcelain": git_porcelain}
 
     def _apply_file_tree(self, entries: list[dict]) -> None:
         active = self._ssh.active
@@ -322,9 +315,8 @@ class JupyterHubTUI(App):
             return
         bar = self.query_one("#status-bar", Static)
         node_text = f"[cyan]CONNECTED:{active.name}[/]"
-        venv_icon = "[green]VENV:ON[/]" if info["venv_on"] else "[red]VENV:OFF[/]"
         git_text = self._parse_git_status(info["git_porcelain"])
-        bar.update(f" {venv_icon}  {node_text}{git_text}")
+        bar.update(f" {node_text}{git_text}")
 
     def on_terminal_display_exited(self, event: TerminalDisplay.Exited) -> None:
         if event.terminal_display.id != "term-display":
@@ -534,14 +526,8 @@ class JupyterHubTUI(App):
         active = self._ssh.active
         if active:
             node_text = f"[cyan]CONNECTED:{active.name}[/]"
-            remote_venv = cfg.remote_venv_path(self._data)
-            if remote_venv and self._ssh.remote_venv_active(active.name, remote_venv):
-                venv_icon = "[green]VENV:ON[/]"
-            else:
-                venv_icon = "[red]VENV:OFF[/]"
         else:
             node_text = "[dim]NO CONNECTION[/]"
-            venv_icon = "[dim]VENV:---[/]"
         repo_path = cfg.git_repo_path(self._data)
         git_text = ""
         if active and repo_path != ".":
@@ -552,7 +538,7 @@ class JupyterHubTUI(App):
             if gs:
                 dirty_text = "[red]*[/]" if gs.dirty else ""
                 git_text = f"  [bright_cyan]git:{gs.branch}{dirty_text}[/]"
-        bar.update(f" {venv_icon}  {node_text}{git_text}")
+        bar.update(f" {node_text}{git_text}")
 
     def _render_welcome(self) -> None:
         if self._data.get("_example"):

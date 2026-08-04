@@ -28,7 +28,6 @@
     "port": 8888
   },
   "venv": {
-    "activate_cmd": "source ~/.bashrc && icetop-cnn",
-    "remote_path": "~/.venv"
+    "activate_cmd": "source ~/.bashrc && icetop-cnn"
   }
 }
