@@ -114,7 +114,7 @@ class JupyterHubTUI(App):
         Binding("ctrl+e", "edit_node", "Edit Node", priority=True),
         Binding("ctrl+h", "show_help", "Help", priority=True),
         Binding("ctrl+g", "git_picker", "Git Repo", priority=True),
-        Binding("ctrl+t", "cycle_focus", "Focus", priority=True),
+        Binding("ctrl+tab", "cycle_focus", "Focus", priority=True),
         Binding("ctrl+b", "git_branch", "Git Branch", priority=True),
         Binding("ctrl+o", "git_checkout", "Git Checkout", priority=True),
         Binding("escape", "quit"),
@@ -233,7 +233,7 @@ class JupyterHubTUI(App):
             "",
             "[cyan]Navigation[/]",
             "  Tab          Toggle focus between panels",
-            "  Ctrl+T       Toggle terminal / file tree during SSH",
+            "  Ctrl+Tab     Toggle terminal / file tree during SSH",
             "  1-3          Quick-connect to node by index",
             "  Ctrl+N       Return to dashboard from SSH",
             "",
@@ -409,16 +409,25 @@ class JupyterHubTUI(App):
         self._content.update(manual_path.read_text())
 
     def action_launch_jupyter(self) -> None:
-        from .jupyter import launch
         if not self._ssh.active:
             self.notify("No active node. Select a node first.", severity="warning")
             return
+        if self._term.pty_active:
+            self.notify("Exit current session first (Ctrl+N).", severity="warning")
+            return
+        from .jupyter import launch
         settings = cfg.jupyter_settings(self._data)
         port = settings.get("port", 8888)
-        remote_venv = cfg.remote_venv_path(self._data) or "~/.venv/icetop"
-        self.notify(f"Launching Jupyter on {self._ssh.active.name}...")
-        launch(self._ssh, self._ssh.active.name, port, remote_venv)
-        self.notify(f"Jupyter tunneling on localhost:{port}")
+        remote_venv = cfg.remote_venv_path(self._data) or "~/.venv"
+        cmd = launch(self._ssh, self._ssh.active.name, port, remote_venv)
+        self._content.display = False
+        term = self._term
+        term.stop()
+        term.reset()
+        term.display = True
+        term.start(cmd)
+        term.focus()
+        self.notify(f"Jupyter tunnel on localhost:{port}")
 
     def action_setup_keys(self) -> None:
         # Run key setup in the embedded terminal.

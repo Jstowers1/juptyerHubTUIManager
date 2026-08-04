@@ -1,33 +1,28 @@
 # Cluster Manual
 
-This manual replaces the stale wiki. Update it when procedures change.
+## Nodes
 
-## Connecting
+| Node | Purpose | Access |
+|------|---------|--------|
+| login | Primary login | `ssh user@login` |
+| worker-1 | Compute | `ssh -J user@login user@worker-1` |
+| worker-2 | Compute | `ssh -J user@login user@worker-2` |
 
-| Node | Purpose | Command |
-|------|---------|---------|
-| pub | General login | `ssh user@pub` |
-| cobalt | IceTop tools | `ssh -J user@pub user@cobalt` |
-| npx-submitter | HTC job submission | `ssh -J user@pub user@npx-submitter` |
+## Environment
 
-Use `kitty +kitten ssh` instead of `ssh` for proper terminfo and graphics support.
-
-## Venv
-
-Always activate before running IceTop tools:
+Activate before running tools:
 
 ```bash
-source ~/.venv/icetop/bin/activate
+source ~/.venv/bin/activate
 ```
 
-The TUI status bar shows VENV:ON when active.
+## Submitting jobs
 
-## Submitting HTC Jobs
-
-1. SSH to npx-submitter (via pub proxy jump).
-2. Activate venv.
-3. Submit with `condor_submit`.
+1. SSH to the submit node (via login proxy jump).
+2. Use the cluster scheduler to submit your job script.
+3. Monitor with the scheduler status command.
 
 ## Git
 
-No dedicated git server on cluster. Use a local clone and rsync.
+The tracked repo lives on the remote system. Use Ctrl+G to set the path,
+Ctrl+B to view branches, Ctrl+O to checkout.

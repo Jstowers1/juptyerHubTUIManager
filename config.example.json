@@ -1,36 +1,34 @@
 {
   "nodes": {
-    "pub": {
-      "host": "pub.example.edu",
-      "user": "username",
+    "login": {
+      "host": "login.example.org",
+      "user": "youruser",
       "port": 22,
-      "description": "General purpose login node"
+      "description": "Primary login node"
     },
-    "cobalt": {
-      "host": "cobalt.example.edu",
-      "user": "username",
+    "worker-1": {
+      "host": "worker-1.example.org",
+      "user": "youruser",
       "port": 22,
-      "description": "IceTop tools access",
-      "proxy": "pub"
+      "description": "Compute node, access via login",
+      "proxy": "login"
     },
-    "npx-submitter": {
-      "host": "npx-submitter.example.edu",
-      "user": "username",
+    "worker-2": {
+      "host": "worker-2.example.org",
+      "user": "youruser",
       "port": 22,
-      "description": "HTC job submission",
-      "proxy": "pub"
+      "description": "Compute node, access via login",
+      "proxy": "login"
     }
-  },
-  "venv": {
-    "local_path": ".venv",
-    "remote_path": "~/.venv/icetop",
-    "activate_script": "bin/activate"
   },
   "git": {
     "repo_path": "."
   },
   "jupyter": {
-    "port": 8888,
-    "directory": "~/notebooks"
+    "port": 8888
+  },
+  "venv": {
+    "local": "",
+    "remote": "~/.venv"
   }
 }

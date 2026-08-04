@@ -9,6 +9,7 @@ import select
 import struct
 import fcntl
 import termios
+import signal
 from typing import Optional
 
 import pyte
@@ -16,7 +17,6 @@ from rich.text import Text
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widget import Widget
-from textual.binding import Binding
 
 
 def key_to_bytes(key: str, char: str | None) -> bytes:
@@ -43,11 +43,14 @@ def key_to_bytes(key: str, char: str | None) -> bytes:
         "ctrl+g": b"\x07",
         "ctrl+h": b"\x08",
         "ctrl+i": b"\x09",
+        "ctrl+j": b"\x0a",
         "ctrl+k": b"\x0b",
         "ctrl+l": b"\x0c",
+        "ctrl+n": b"\x0e",
         "ctrl+o": b"\x0f",
         "ctrl+p": b"\x10",
         "ctrl+q": b"\x11",
+        "ctrl+r": b"\x12",
         "ctrl+s": b"\x13",
         "ctrl+t": b"\x14",
         "ctrl+u": b"\x15",
@@ -72,8 +75,10 @@ class TerminalDisplay(Widget):
     TerminalDisplay {
         background: #1d1f21;
         color: #c5c8c6;
-        padding: 0 1;
+        padding: 0;
         overflow: hidden;
+        width: 1fr;
+        height: 1fr;
     }
     """
 
@@ -95,21 +100,14 @@ class TerminalDisplay(Widget):
 
     @property
     def pty_active(self) -> bool:
-        # Do NOT override Widget.is_running. That breaks Textual's
-        # message pump checks. Use a separate name.
         return self._pty_running
 
     def on_key(self, event) -> None:
-        # When PTY is running, eat all keys and send to the process.
-        # App priority bindings (ctrl+n etc) already fired before this.
+        # App priority bindings already fired before this.
         if self._pty_running and self._master_fd is not None:
             self.send_key(event.key, event.character)
             event.prevent_default()
             event.stop()
-
-    def action_send_tab(self) -> None:
-        # Send tab to PTY instead of letting focus_next steal it.
-        self.send_key("tab", "\t")
 
     def start(self, command: list[str]) -> None:
         self._pty_running = True
@@ -121,6 +119,7 @@ class TerminalDisplay(Widget):
         else:
             flags = fcntl.fcntl(self._master_fd, fcntl.F_GETFL)
             fcntl.fcntl(self._master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+            self._resize_pty()
             self._poll_timer = self.set_interval(0.05, self._poll_pty)
 
     def send_key(self, key: str, char: str | None) -> None:
@@ -130,6 +129,23 @@ class TerminalDisplay(Widget):
                 os.write(self._master_fd, data)
             except OSError:
                 pass
+
+    def _resize_pty(self) -> None:
+        # Resize PTY and pyte screen to match widget size.
+        if self._master_fd is None:
+            return
+        w = max(1, self.size.width)
+        h = max(1, self.size.height)
+        try:
+            winsize = struct.pack("HHHH", h, w, 0, 0)
+            fcntl.ioctl(self._master_fd, termios.TIOCSWINSZ, winsize)
+        except OSError:
+            pass
+        self._screen.resize(h, w)
+        self._refresh_display()
+
+    def on_resize(self, event) -> None:
+        self._resize_pty()
 
     def _stop_timer(self) -> None:
         if self._poll_timer is not None:
@@ -182,8 +198,24 @@ class TerminalDisplay(Widget):
 
     def render(self) -> Text:
         if not self._lines:
-            return Text("")
-        return Text("\n".join(self._lines), style="white on #1d1f21")
+            return Text(" ", style="white on #1d1f21")
+        parts = []
+        cursor = self._screen.cursor
+        for row, line in enumerate(self._lines):
+            if not line:
+                line = " "
+            if row == cursor.y and self._pty_running:
+                col = min(cursor.x, len(line))
+                # Render cursor as reverse video block.
+                before = line[:col]
+                at = line[col] if col < len(line) else " "
+                after = line[col + 1:] if col + 1 <= len(line) else ""
+                parts.append(Text(before, style="white on #1d1f21"))
+                parts.append(Text(at, style="black on white"))
+                parts.append(Text(after + "\n", style="white on #1d1f21"))
+            else:
+                parts.append(Text(line + "\n", style="white on #1d1f21"))
+        return Text("").join(parts)
 
     def stop(self) -> None:
         self._pty_running = False
@@ -202,7 +234,9 @@ class TerminalDisplay(Widget):
             self._master_fd = None
 
     def reset(self) -> None:
-        self._screen = pyte.Screen(80, 24)
+        w = max(1, self.size.width)
+        h = max(1, self.size.height)
+        self._screen = pyte.Screen(w, h)
         self._stream = pyte.Stream(self._screen)
         self._lines = []
         self.refresh()

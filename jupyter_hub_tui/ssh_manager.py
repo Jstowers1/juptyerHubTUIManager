@@ -55,9 +55,16 @@ class SSHManager:
         return node
 
     def raw_ssh_command(self, name: str) -> list[str]:
-        # Plain ssh without kitty wrapper. For embedded terminal and tmux.
+        # Plain ssh without kitty wrapper. For embedded terminal.
+        # ControlMaster lets _ssh_prefix commands reuse this connection.
         node = self._nodes[name]
-        cmd = ["ssh", "-tt", f"{node.user}@{node.host}", "-p", str(node.port)]
+        cmd = [
+            "ssh", "-tt",
+            "-o", "ControlMaster=auto",
+            "-o", "ControlPath=/tmp/tui-ssh-%C",
+            "-o", "ControlPersist=60",
+            f"{node.user}@{node.host}", "-p", str(node.port),
+        ]
         if node.proxy and node.proxy in self._nodes:
             proxy = self._nodes[node.proxy]
             cmd += ["-J", f"{proxy.user}@{proxy.host}:{proxy.port}"]
@@ -90,12 +97,18 @@ class SSHManager:
 
     def _ssh_prefix(self, name: str) -> list[str]:
         # Build ssh + proxy prefix for remote commands.
+        # Uses same ControlPath as raw_ssh_command so commands reuse
+        # the interactive SSH session without re-authenticating.
         node = self._nodes[name]
         cmd = ["ssh"]
         if node.proxy and node.proxy in self._nodes:
             proxy = self._nodes[node.proxy]
             cmd += ["-J", f"{proxy.user}@{proxy.host}:{proxy.port}"]
-        cmd += ["-p", str(node.port), f"{node.user}@{node.host}"]
+        cmd += [
+            "-o", "ControlPath=/tmp/tui-ssh-%C",
+            "-o", "ConnectTimeout=5",
+            "-p", str(node.port), f"{node.user}@{node.host}",
+        ]
         return cmd
 
     def list_remote_dir(self, name: str, path: str = "~") -> list[dict]:
@@ -103,7 +116,6 @@ class SSHManager:
         # ponytail: blocking subprocess, ~0.5s per call. Fine for browsing.
         cmd = self._ssh_prefix(name) + [
             "-o", "ConnectTimeout=5",
-            "-o", "BatchMode=yes",
             f"ls -1F {path} 2>/dev/null",
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -120,7 +132,6 @@ class SSHManager:
         # Run git status on remote. Returns porcelain output or None.
         cmd = self._ssh_prefix(name) + [
             "-o", "ConnectTimeout=5",
-            "-o", "BatchMode=yes",
             f"git -C {path} status --porcelain=v1 -b 2>/dev/null",
         ]
         try:
@@ -135,7 +146,6 @@ class SSHManager:
         # List branches on remote. Returns [branch_name, ...].
         cmd = self._ssh_prefix(name) + [
             "-o", "ConnectTimeout=5",
-            "-o", "BatchMode=yes",
             f"git -C {path} branch --format='%(refname:short)' 2>/dev/null",
         ]
         try:
@@ -150,7 +160,6 @@ class SSHManager:
         # Checkout a branch on remote. Returns True on success.
         cmd = self._ssh_prefix(name) + [
             "-o", "ConnectTimeout=5",
-            "-o", "BatchMode=yes",
             f"git -C {path} checkout {branch} 2>&1",
         ]
         try:
@@ -212,33 +221,34 @@ def _base_ssh_command() -> list[str]:
 def _self_check() -> None:
     data = {
         "nodes": {
-            "pub": {
-                "host": "pub.example.edu",
+            "login": {
+                "host": "login.example.org",
                 "user": "test",
                 "port": 22,
                 "description": "test",
             },
-            "cobalt": {
-                "host": "cobalt.icecube.example.edu",
+            "worker-1": {
+                "host": "worker-1.example.org",
                 "user": "test",
                 "port": 22,
                 "description": "test",
-                "proxy": "pub",
+                "proxy": "login",
     }
         }
     }
     mgr = SSHManager(data)
-    assert "pub" in mgr.nodes
+    assert "login" in mgr.nodes
     assert mgr.active is None
-    pub = mgr.set_active("pub")
-    assert pub.name == "pub"
+    pub = mgr.set_active("login")
+    assert pub.name == "login"
     assert mgr.active is not None
-    assert mgr.active.name == "pub"
-    cmd = mgr.command("cobalt")
+    assert mgr.active.name == "login"
+    cmd = mgr.command("worker-1")
     assert "-J" in cmd, f"proxy jump missing: {cmd}"
-    raw = mgr.raw_ssh_command("cobalt")
+    raw = mgr.raw_ssh_command("worker-1")
     assert raw[0] == "ssh", f"raw command should start with ssh: {raw}"
     assert "-J" in raw, f"proxy jump missing from raw: {raw}"
+    assert "ControlMaster" in " ".join(raw), "ControlMaster missing"
     print("SSH self-check passed")
 
 
