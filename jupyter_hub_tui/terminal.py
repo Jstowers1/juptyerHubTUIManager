@@ -113,6 +113,7 @@ class TerminalDisplay(Widget):
         self._pty_running = False
         self._poll_timer = None
         self._command: list[str] = []
+        self._pending_start = False
 
     @property
     def pty_active(self) -> bool:
@@ -134,23 +135,25 @@ class TerminalDisplay(Widget):
             event.stop()
 
     def start(self, command: list[str]) -> None:
-        self._pty_running = True
         self._command = command
-        # Defer pty.fork until after the widget has real dimensions.
-        # Calling on_mount or compose leaves size at 0x0, so SSH MOTD
-        # fills a tiny 80x24 screen and the prompt scrolls off.
-        self.call_after_refresh(self._do_start)
+        self._pending_start = True
+        # If widget already has size, start now. Otherwise on_resize fires
+        # once layout settles, which triggers _try_start.
+        if self.size.width > 0 and self.size.height > 0:
+            self._try_start()
 
-    def _do_start(self) -> None:
-        if not self._pty_running:
+    def _try_start(self) -> None:
+        if not self._pending_start:
             return
         w = max(1, self.size.width)
         h = max(1, self.size.height)
+        if w <= 1 or h <= 1:
+            return
+        self._pending_start = False
+        self._pty_running = True
         self._screen.resize(h, w)
         self._pid, self._master_fd = pty.fork()
         if self._pid == 0:
-            # Set PTY size before exec so SSH reads correct dimensions.
-            # Without this, SSH formats output for the default 80x24.
             winsize = struct.pack("HHHH", h, w, 0, 0)
             try:
                 fcntl.ioctl(1, termios.TIOCSWINSZ, winsize)
@@ -188,7 +191,10 @@ class TerminalDisplay(Widget):
         self._refresh_display()
 
     def on_resize(self, event) -> None:
-        self._resize_pty()
+        if self._pending_start:
+            self._try_start()
+        else:
+            self._resize_pty()
 
     def _stop_timer(self) -> None:
         if self._poll_timer is not None:
