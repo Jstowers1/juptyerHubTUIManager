@@ -50,7 +50,13 @@ Screen {
     border: solid $accent;
 }
 
+#content-area {
+    height: 1fr;
+    padding: 1 2;
+}
+
 #term-display {
+    height: 1fr;
     display: none;
     background: #1d1f21;
 }
@@ -72,10 +78,6 @@ Screen {
     color: $text-muted;
     text-style: bold;
     margin-top: 1;
-}
-
-#content-area {
-    padding: 1 2;
 }
 
 #file-tree {
@@ -142,7 +144,7 @@ class JupyterHubTUI(App):
                 yield Label("", id="ssh-command-display")
                 yield Label("Files", classes="section-label")
                 yield Tree("root", id="file-tree")
-            with VerticalScroll(id="right-panel"):
+            with Vertical(id="right-panel"):
                 yield FocusableStatic("", id="content-area")
                 yield TerminalDisplay(id="term-display")
         yield Footer()
