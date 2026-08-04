@@ -91,6 +91,7 @@ class JupyterHubTUI(App):
         Binding("2", "connect_node('cobalt')", "Cobalt", show=False),
         Binding("3", "connect_node('npx-submitter')", "NPX", show=False),
         Binding("m", "show_manual", "Manual"),
+        Binding("j", "launch_jupyter", "Jupyter"),
     ]
 
     def __init__(self):
@@ -190,6 +191,19 @@ class JupyterHubTUI(App):
         # ponytail: Static renders rich markup but not full markdown.
         # Upgrade to Markdown widget if tables/code blocks need rendering.
         content.update(text)
+
+    def action_launch_jupyter(self) -> None:
+        # Launch Jupyter on the active node and open the browser.
+        from .jupyter import launch
+        if not self._ssh.active:
+            self.notify("No active node. Select a node first.", severity="warning")
+            return
+        settings = cfg.jupyter_settings(self._data)
+        port = settings.get("port", 8888)
+        directory = settings.get("directory", "~")
+        self.notify(f"Launching Jupyter on {self._ssh.active.name}...")
+        launch(self._ssh, self._ssh.active.name, port, directory)
+        self.notify(f"Jupyter opening at http://localhost:{port}")
 
 
 def main() -> None:
