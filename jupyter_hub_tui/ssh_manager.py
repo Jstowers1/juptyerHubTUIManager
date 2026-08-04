@@ -88,6 +88,19 @@ class SSHManager:
         # Return the raw SSH command for the embedded terminal to run.
         return self.raw_ssh_command(name)
 
+    def setup_keys_command(self) -> list[str]:
+        # Return a shell command that generates a key and copies it to all nodes.
+        # Runs in the embedded terminal so the user can enter passwords.
+        targets = []
+        for name, node in self._nodes.items():
+            targets.append(f"ssh-copy-id -p {node.port} {node.user}@{node.host}")
+        script = (
+            "test -f ~/.ssh/id_ed25519 || "
+            "ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ''; "
+            + "; ".join(targets)
+        )
+        return ["bash", "-c", script]
+
     def setup_keys(self, name: str | None = None) -> list[str]:
         # Generate an SSH key if none exists, then copy to target nodes.
         # Returns a list of status messages for display.

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -53,8 +52,13 @@ Screen {
     border: solid $accent;
 }
 
-#term-display:focus {
+#term-display {
+    display: none;
     border: solid $accent;
+}
+
+#term-display:focus {
+    border: double $accent;
 }
 
 .node-list-label {
@@ -89,12 +93,10 @@ Screen {
 
 
 class NodeListItem(ListItem):
-    # ListItem holding a node name for the connection panel.
     pass
 
 
 class JupyterHubTUI(App):
-    # Main app. Manages cluster connections, venv status, and docs.
 
     TITLE = "Jupyter Hub TUI"
     CSS = CSS
@@ -102,7 +104,7 @@ class JupyterHubTUI(App):
     BINDINGS = [
         Binding("escape", "quit", "Quit"),
         Binding("ctrl+r", "refresh", "Refresh"),
-        Binding("ctrl+n", "new_connection", "Connect"),
+        Binding("ctrl+n", "new_connection", "Dashboard"),
         Binding("ctrl+m", "show_manual", "Manual"),
         Binding("ctrl+j", "launch_jupyter", "Jupyter"),
         Binding("ctrl+k", "setup_keys", "SSH Keys"),
@@ -115,7 +117,6 @@ class JupyterHubTUI(App):
         super().__init__()
         self._data = cfg.load()
         self._ssh = SSHManager(self._data)
-        self._term_widget: TerminalDisplay | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -128,6 +129,7 @@ class JupyterHubTUI(App):
                 yield Tree("root", id="file-tree")
             with VerticalScroll(id="right-panel"):
                 yield Static("", id="content-area")
+                yield TerminalDisplay(id="term-display")
         yield Footer()
         yield Static("", id="status-bar")
 
@@ -138,10 +140,14 @@ class JupyterHubTUI(App):
         self._populate_file_tree()
         self._node_names = list(self._ssh.nodes.keys())
 
+    @property
+    def _term(self) -> TerminalDisplay:
+        return self.query_one("#term-display", TerminalDisplay)
+
     def on_key(self, event) -> None:
-        # If the terminal is running, forward all keys to it.
-        if self._term_widget is not None and self._term_widget.is_running:
-            self._term_widget.send_key(event.key, event.character)
+        # Forward keys to terminal when it is running.
+        if self._term.is_running:
+            self._term.send_key(event.key, event.character)
             event.prevent_default()
             event.stop()
             return
@@ -149,28 +155,56 @@ class JupyterHubTUI(App):
         if event.character and event.character.isdigit():
             idx = int(event.character) - 1
             if 0 <= idx < len(self._node_names):
-                self.run_worker(self.action_connect_node(self._node_names[idx]))
+                self._start_ssh(self._node_names[idx])
                 event.prevent_default()
                 event.stop()
 
-    def action_new_connection(self) -> None:
-        # Stop the terminal and return to dashboard view.
-        if self._term_widget is not None:
-            self._term_widget.stop()
-            self._term_widget.remove()
-            self._term_widget = None
-        content = self.query_one("#content-area", Static)
-        content.display = True
-        content.focus()
+    def _start_ssh(self, name: str) -> None:
+        # Stop old session, start new one in the same widget.
+        if name not in self._ssh.nodes:
+            self.notify(f"Unknown node: {name}", severity="error")
+            return
+        node = self._ssh.set_active(name)
+        self._update_status()
+        cmd_display = self.query_one("#ssh-command-display", Label)
+        cmd_display.update(f"[dim]$ {self._ssh.command_str(name)}[/]")
+        # Hide content, show terminal.
+        self.query_one("#content-area", Static).display = False
+        term = self._term
+        term.stop()
+        term.reset()
+        term.display = True
+        cmd = self._ssh.launch(name)
+        term.start(cmd)
+        term.focus()
+        self.notify(f"Connecting to: {node.name} ({node.host})")
 
     def on_terminal_display_exited(self, event: TerminalDisplay.Exited) -> None:
-        # SSH process exited: clean up and restore dashboard.
-        if self._term_widget is not None:
-            self._term_widget = None
+        # SSH process exited: restore dashboard.
+        term = self._term
+        term.display = False
         content = self.query_one("#content-area", Static)
         content.display = True
         content.update("[yellow]SSH session ended.[/]")
         content.focus()
+
+    def action_new_connection(self) -> None:
+        # Stop terminal and return to dashboard.
+        self._term.stop()
+        self._term.display = False
+        content = self.query_one("#content-area", Static)
+        content.display = True
+        content.focus()
+
+    def action_focus_left(self) -> None:
+        self.query_one("#node-list", ListView).focus()
+
+    def action_focus_terminal(self) -> None:
+        term = self._term
+        if term.display:
+            term.focus()
+        else:
+            self.query_one("#content-area", Static).focus()
 
     def _populate_nodes(self) -> None:
         lv = self.query_one("#node-list", ListView)
@@ -193,7 +227,7 @@ class JupyterHubTUI(App):
         self._add_tree_node(tree.root, root, depth=2)
 
     def _add_tree_node(self, node: TreeNode, path: Path, depth: int) -> None:
-        # ponytail: fixed depth 2, no lazy loading. Add when dirs get large.
+        # ponytail: fixed depth 2, no lazy loading.
         if depth <= 0:
             return
         try:
@@ -218,7 +252,6 @@ class JupyterHubTUI(App):
             node_text = f"[cyan]CONNECTED:{active.name}[/]"
         else:
             node_text = "[dim]NO CONNECTION[/]"
-
         repo_path = cfg.git_repo_path(self._data)
         if repo_path == ".":
             repo_path = str(Path(__file__).resolve().parent.parent)
@@ -233,7 +266,6 @@ class JupyterHubTUI(App):
             git_text = f"  [blue]git:{gs.branch}{dirty_text}{ahead_behind}[/]"
         else:
             git_text = ""
-
         bar.update(f" {venv_icon}  {node_text}{git_text}")
 
     def _render_welcome(self) -> None:
@@ -247,43 +279,8 @@ class JupyterHubTUI(App):
             content.update("Select a node to connect, or press 1/2/3.\n\n")
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        # Handle node selection from the list.
         if hasattr(event.list_view, "id") and event.list_view.id == "node-list":
-            name = event.item.data
-            self.run_worker(self.action_connect_node(name))
-
-    async def action_connect_node(self, name: str) -> None:
-        # Connect to a node in the embedded terminal.
-        if name not in self._ssh.nodes:
-            self.notify(f"Unknown node: {name}", severity="error")
-            return
-        node = self._ssh.set_active(name)
-        self._update_status()
-        cmd_display = self.query_one("#ssh-command-display", Label)
-        cmd_display.update(f"[dim]$ {self._ssh.command_str(name)}[/]")
-        # Stop any existing terminal session.
-        old = self.query_one("#content-area", Static)
-        old.display = False
-        if self._term_widget is not None:
-            self._term_widget.stop()
-            self._term_widget.remove()
-            self._term_widget = None
-        # Start the embedded terminal.
-        self._term_widget = TerminalDisplay(id="term-display")
-        await self.query_one("#right-panel").mount(self._term_widget)
-        cmd = self._ssh.launch(name)
-        self._term_widget.start(cmd)
-        self._term_widget.focus()
-        self.notify(f"Connecting to: {node.name} ({node.host})")
-
-    def action_focus_left(self) -> None:
-        self.query_one("#node-list", ListView).focus()
-
-    def action_focus_terminal(self) -> None:
-        if self._term_widget is not None:
-            self._term_widget.focus()
-        else:
-            self.query_one("#content-area", Static).focus()
+            self._start_ssh(event.item.data)
 
     def action_refresh(self) -> None:
         self._update_status()
@@ -291,17 +288,14 @@ class JupyterHubTUI(App):
         self.notify("Status refreshed")
 
     def action_show_manual(self) -> None:
-        # Load and render the cluster manual in the content area.
         manual_path = Path(__file__).resolve().parent.parent / "docs" / "manual.md"
         content = self.query_one("#content-area", Static)
         if not manual_path.exists():
             content.update("[red]Manual not found at docs/manual.md[/]")
             return
-        text = manual_path.read_text()
-        content.update(text)
+        content.update(manual_path.read_text())
 
     def action_launch_jupyter(self) -> None:
-        # Launch Jupyter on the active node via euporie.
         from .jupyter import launch
         if not self._ssh.active:
             self.notify("No active node. Select a node first.", severity="warning")
@@ -314,31 +308,33 @@ class JupyterHubTUI(App):
         self.notify(f"Jupyter tunneling on localhost:{port}")
 
     def action_setup_keys(self) -> None:
-        # Generate and copy SSH keys to all configured nodes.
-        self.notify("Setting up SSH keys...")
-        msgs = self._ssh.setup_keys()
-        for msg in msgs:
-            self.notify(msg, timeout=5)
+        # Run key setup in the embedded terminal so passwords work.
+        self.query_one("#content-area", Static).display = False
+        term = self._term
+        term.stop()
+        term.reset()
+        term.display = True
+        term.start(self._ssh.setup_keys_command())
+        term.focus()
+        self.notify("Setting up SSH keys. Enter passwords as prompted.")
 
     def action_edit_node(self) -> None:
-        # Open the edit modal for the active node.
         if not self._ssh.active:
             self.notify("No active node. Select a node first.", severity="warning")
             return
         self.push_screen(NodeEditScreen(self._ssh.active, self._data, self._on_node_saved))
 
     def _on_node_saved(self) -> None:
-        # Reload config, rebuild SSH manager, repopulate UI.
         self._data = cfg.load()
         self._ssh = SSHManager(self._data)
         self._populate_nodes()
         self._update_status()
         self._populate_file_tree()
+        self._node_names = list(self._ssh.nodes.keys())
         self.notify("Node saved to config.json")
 
 
 class NodeEditScreen(ModalScreen):
-    # Modal screen for editing node connection details.
 
     BINDINGS = [Binding("escape", "app.pop_screen", "Cancel", show=False)]
 

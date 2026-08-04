@@ -182,6 +182,13 @@ class TerminalDisplay(Widget):
                 pass
             self._master_fd = None
 
+    def reset(self) -> None:
+        # Clear screen state for a new session.
+        self._screen = pyte.Screen(80, 24)
+        self._stream = pyte.Stream(self._screen)
+        self._lines = []
+        self.refresh()
+
     def on_unmount(self) -> None:
         self.stop()
 
