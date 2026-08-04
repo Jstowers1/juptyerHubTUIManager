@@ -34,14 +34,27 @@ def key_to_bytes(key: str, char: str | None) -> bytes:
         "end": b"\x1b[F",
         "pageup": b"\x1b[5~",
         "pagedown": b"\x1b[6~",
+        "ctrl+a": b"\x01",
+        "ctrl+b": b"\x02",
         "ctrl+c": b"\x03",
         "ctrl+d": b"\x04",
-        "ctrl+z": b"\x1a",
+        "ctrl+f": b"\x06",
+        "ctrl+g": b"\x07",
+        "ctrl+h": b"\x08",
+        "ctrl+i": b"\x09",
+        "ctrl+k": b"\x0b",
         "ctrl+l": b"\x0c",
-        "ctrl+a": b"\x01",
-        "ctrl+e": b"\x05",
-        "ctrl+w": b"\x17",
+        "ctrl+o": b"\x0f",
+        "ctrl+p": b"\x10",
+        "ctrl+q": b"\x11",
+        "ctrl+s": b"\x13",
+        "ctrl+t": b"\x14",
         "ctrl+u": b"\x15",
+        "ctrl+v": b"\x16",
+        "ctrl+w": b"\x17",
+        "ctrl+x": b"\x18",
+        "ctrl+y": b"\x19",
+        "ctrl+z": b"\x1a",
     }
     if key in special:
         return special[key]
@@ -51,9 +64,8 @@ def key_to_bytes(key: str, char: str | None) -> bytes:
 
 
 class TerminalDisplay(Widget):
-    # Renders a pyte screen as Textual content.
 
-    can_focus = False
+    can_focus = True
 
     DEFAULT_CSS = """
     TerminalDisplay {
@@ -61,12 +73,10 @@ class TerminalDisplay(Widget):
         color: #c5c8c6;
         padding: 0 1;
         overflow: hidden;
-        border: tall $accent;
     }
     """
 
     class Exited(Message):
-        # Sent when the PTY process exits.
         def __init__(self, exit_code: int) -> None:
             self.exit_code = exit_code
             super().__init__()
@@ -86,8 +96,15 @@ class TerminalDisplay(Widget):
     def is_running(self) -> bool:
         return self._running
 
+    def on_key(self, event) -> None:
+        # Terminal eats all keys when running. Priority bindings
+        # on the App fire before this handler for escape hatches.
+        if self._running:
+            self.send_key(event.key, event.character)
+            event.prevent_default()
+            event.stop()
+
     def start(self, command: list[str]) -> None:
-        # Fork a PTY and run the command.
         self._running = True
         self._pid, self._master_fd = pty.fork()
         if self._pid == 0:
@@ -100,7 +117,6 @@ class TerminalDisplay(Widget):
             self._poll_timer = self.set_interval(0.05, self._poll_pty)
 
     def send_key(self, key: str, char: str | None) -> None:
-        # Forward a key press to the PTY.
         data = key_to_bytes(key, char)
         if data and self._master_fd is not None and self._running:
             try:
@@ -114,7 +130,6 @@ class TerminalDisplay(Widget):
             self._poll_timer = None
 
     def _poll_pty(self) -> None:
-        # Read PTY output, feed to pyte, check exit.
         if not self._running or self._master_fd is None:
             return
         try:
@@ -141,7 +156,6 @@ class TerminalDisplay(Widget):
                 self._handle_exit()
 
     def _handle_exit(self, status: int = 0) -> None:
-        # Clean up PTY state. Called once on exit.
         if not self._running:
             return
         self._running = False
@@ -156,8 +170,7 @@ class TerminalDisplay(Widget):
         self.post_message(self.Exited(status))
 
     def _refresh_display(self) -> None:
-        lines = [line.rstrip() for line in self._screen.display]
-        self._lines = lines
+        self._lines = [line.rstrip() for line in self._screen.display]
         self.refresh()
 
     def render(self) -> Text:
@@ -166,7 +179,6 @@ class TerminalDisplay(Widget):
         return Text("\n".join(self._lines), style="white on #1d1f21")
 
     def stop(self) -> None:
-        # Kill the PTY process and clean up.
         self._running = False
         self._stop_timer()
         if self._pid is not None:
@@ -183,7 +195,6 @@ class TerminalDisplay(Widget):
             self._master_fd = None
 
     def reset(self) -> None:
-        # Clear screen state for a new session.
         self._screen = pyte.Screen(80, 24)
         self._stream = pyte.Stream(self._screen)
         self._lines = []
@@ -191,10 +202,3 @@ class TerminalDisplay(Widget):
 
     def on_unmount(self) -> None:
         self.stop()
-
-    def resize(self, cols: int, rows: int) -> None:
-        # Resize the pyte screen and PTY.
-        self._screen.resize(rows, cols)
-        if self._master_fd is not None:
-            winsize = struct.pack("HHHH", rows, cols, 0, 0)
-            fcntl.ioctl(self._master_fd, termios.TIOCSWINSZ, winsize)

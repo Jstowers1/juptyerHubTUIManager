@@ -54,11 +54,7 @@ Screen {
 
 #term-display {
     display: none;
-    border: solid $accent;
-}
-
-#term-display:focus {
-    border: double $accent;
+    background: #1d1f21;
 }
 
 .node-list-label {
@@ -101,7 +97,8 @@ class JupyterHubTUI(App):
     TITLE = "Jupyter Hub TUI"
     CSS = CSS
 
-    # priority=True only for escape hatches that must fire during SSH.
+    # priority=True: fires before any widget. App-level escape hatches
+    # that must work during SSH sessions.
     BINDINGS = [
         Binding("escape", "quit", "Quit", priority=True),
         Binding("ctrl+r", "refresh", "Refresh", priority=True),
@@ -143,50 +140,12 @@ class JupyterHubTUI(App):
     def _term(self) -> TerminalDisplay:
         return self.query_one("#term-display", TerminalDisplay)
 
-    # Keys that bypass the terminal during SSH sessions.
-    _ESCAPE_KEYS = frozenset({
-        "ctrl+n", "ctrl+r", "ctrl+m", "ctrl+j",
-        "ctrl+k", "ctrl+e", "escape",
-    })
-
-    def on_key(self, event) -> None:
-        # SSH running: forward everything except escape hatches.
-        if self._term.is_running:
-            if event.key in self._ESCAPE_KEYS:
-                return
-            self._term.send_key(event.key, event.character)
-            event.prevent_default()
-            event.stop()
-            return
-        # Dashboard: tab cycles focus between panels.
-        if event.key == "tab":
-            self._cycle_focus()
-            event.prevent_default()
-            event.stop()
-            return
-        # Digit keys quick-connect to nodes by index.
-        if event.character and event.character.isdigit():
-            idx = int(event.character) - 1
-            if 0 <= idx < len(self._node_names):
-                self._start_ssh(self._node_names[idx])
-                event.prevent_default()
-                event.stop()
-
-    def _cycle_focus(self) -> None:
-        # Toggle focus between left panel and right panel.
-        focused = self.focused
-        left = self.query_one("#left-panel")
-        right = self.query_one("#right-panel")
-        if focused is not None and left in focused.ancestors:
-            self.query_one("#content-area", Static).focus()
-        else:
-            self.query_one("#node-list", ListView).focus()
-
-    def action_connect_node(self, name: str) -> None:
-        self._start_ssh(name)
+    # --- SSH session mode ---
+    # Terminal has can_focus=True. When SSH starts, focus moves to the
+    # terminal widget. Its on_key eats everything. App priority bindings
+    # fire first, so Ctrl+N still escapes.
 
     def _start_ssh(self, name: str) -> None:
-        # Stop old session, start new one in the same widget.
         if name not in self._ssh.nodes:
             self.notify(f"Unknown node: {name}", severity="error")
             return
@@ -194,7 +153,6 @@ class JupyterHubTUI(App):
         self._update_status()
         cmd_display = self.query_one("#ssh-command-display", Label)
         cmd_display.update(f"[dim]$ {self._ssh.command_str(name)}[/]")
-        # Hide content, show terminal.
         self.query_one("#content-area", Static).display = False
         term = self._term
         term.stop()
@@ -206,7 +164,6 @@ class JupyterHubTUI(App):
         self.notify(f"Connecting to: {node.name} ({node.host})")
 
     def on_terminal_display_exited(self, event: TerminalDisplay.Exited) -> None:
-        # SSH process exited: restore dashboard.
         term = self._term
         term.display = False
         content = self.query_one("#content-area", Static)
@@ -215,12 +172,44 @@ class JupyterHubTUI(App):
         content.focus()
 
     def action_new_connection(self) -> None:
-        # Stop terminal and return to dashboard.
         self._term.stop()
         self._term.display = False
         content = self.query_one("#content-area", Static)
         content.display = True
         content.focus()
+
+    # --- Dashboard mode ---
+    # ListView is NOT auto-focused. Focus stays on content-area (Static).
+    # Static does not eat keys, so App.on_key fires and handles everything.
+
+    def on_key(self, event) -> None:
+        # Ignore keys if terminal has focus (SSH session).
+        if self._term.is_running:
+            return
+        # Tab: toggle between node list and content.
+        if event.key == "tab":
+            self._cycle_focus()
+            event.prevent_default()
+            event.stop()
+            return
+        # Digits: quick-connect.
+        if event.character and event.character.isdigit():
+            idx = int(event.character) - 1
+            if 0 <= idx < len(self._node_names):
+                self._start_ssh(self._node_names[idx])
+                event.prevent_default()
+                event.stop()
+
+    def _cycle_focus(self) -> None:
+        focused = self.focused
+        left = self.query_one("#left-panel")
+        if focused is not None and left in focused.ancestors_with_self:
+            self.query_one("#content-area", Static).focus()
+        else:
+            self.query_one("#node-list", ListView).focus()
+
+    def action_connect_node(self, name: str) -> None:
+        self._start_ssh(name)
 
     def _populate_nodes(self) -> None:
         lv = self.query_one("#node-list", ListView)
@@ -293,6 +282,7 @@ class JupyterHubTUI(App):
             )
         else:
             content.update("Select a node to connect, or press 1/2/3.\n\n")
+        content.focus()
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if hasattr(event.list_view, "id") and event.list_view.id == "node-list":
@@ -324,7 +314,7 @@ class JupyterHubTUI(App):
         self.notify(f"Jupyter tunneling on localhost:{port}")
 
     def action_setup_keys(self) -> None:
-        # Run key setup in the embedded terminal so passwords work.
+        # Run key setup in the embedded terminal.
         self.query_one("#content-area", Static).display = False
         term = self._term
         term.stop()
