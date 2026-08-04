@@ -55,6 +55,14 @@ Screen {
     background: #1d1f21;
 }
 
+#help-panel {
+    display: none;
+    height: 1fr;
+    background: $surface;
+    padding: 0 1;
+    overflow-y: auto;
+}
+
 .node-list-label {
     color: $text-muted;
     text-style: bold;
@@ -102,18 +110,16 @@ class JupyterHubTUI(App):
 
     # Terminal.on_key intercepts escape hatches during SSH and calls
     # actions directly. These bindings handle dashboard mode only.
-    # Ctrl+\ toggles sidebar and works as a terminal escape hatch too.
     BINDINGS = [
-        Binding("ctrl+n", "new_connection", "Dashboard"),
         Binding("ctrl+r", "refresh", "Refresh"),
         Binding("ctrl+m", "show_manual", "Manual"),
-        Binding("ctrl+j", "launch_jupyter", "Jupyter"),
         Binding("ctrl+k", "setup_keys", "SSH Keys"),
         Binding("ctrl+e", "edit_node", "Edit Node"),
         Binding("ctrl+h", "show_help", "Help"),
         Binding("ctrl+g", "git_picker", "Git Repo"),
         Binding("ctrl+b", "git_branch", "Git Branch"),
         Binding("ctrl+backslash", "toggle_sidebar", "Sidebar", priority=True),
+        Binding("ctrl+t", "cycle_focus", "Focus", priority=True),
         Binding("escape", "quit"),
         Binding("tab", "cycle_focus", show=False),
         Binding("1", "quick_connect(0)", show=False),
@@ -130,6 +136,7 @@ class JupyterHubTUI(App):
         yield Header()
         with Horizontal():
             with Vertical(id="left-panel"):
+                yield Static(self._help_text(), id="help-panel")
                 yield Label("Cluster Nodes", classes="node-list-label")
                 yield ListView(id="node-list")
                 yield Label("", id="ssh-command-display")
@@ -177,20 +184,18 @@ class JupyterHubTUI(App):
         cmd = self._ssh.launch(name)
         term.start(cmd)
         term.focus()
+        self._populate_file_tree()
         self.notify(f"Connecting to: {node.name} ({node.host})")
 
     def on_terminal_display_exited(self, event: TerminalDisplay.Exited) -> None:
+        self._ssh._active = None
         term = self._term
         term.display = False
         self._content.display = True
         self._content.update("[yellow]SSH session ended.[/]")
         self._content.focus()
-
-    def action_new_connection(self) -> None:
-        self._term.stop()
-        self._term.display = False
-        self._content.display = True
-        self._content.focus()
+        self._update_status()
+        self._populate_file_tree()
 
     # --- Actions ---
 
@@ -204,6 +209,15 @@ class JupyterHubTUI(App):
         self._term._resize_pty()
 
     def action_cycle_focus(self) -> None:
+        # Ctrl+T: During SSH, toggle between terminal and file tree.
+        # Tab: In dashboard, toggle between left panel and content.
+        if self._term.pty_active:
+            tree = self.query_one("#file-tree", Tree)
+            if self.focused is tree:
+                self._term.focus()
+            else:
+                tree.focus()
+            return
         focused = self.focused
         left = self.query_one("#left-panel")
         if focused is not None and left in focused.ancestors_with_self:
@@ -212,12 +226,9 @@ class JupyterHubTUI(App):
             self.query_one("#node-list", ListView).focus()
 
     def action_show_help(self) -> None:
-        if self._term.pty_active:
-            return
-        self._content.display = True
-        self._term.display = False
-        self._content.update(self._help_text())
-        self._content.focus()
+        help_panel = self.query_one("#help-panel")
+        help_panel.display = not help_panel.display
+        self._term._resize_pty()
 
     @staticmethod
     def _help_text() -> str:
@@ -226,17 +237,15 @@ class JupyterHubTUI(App):
             "",
             "[cyan]Navigation[/]",
             "  Tab          Toggle focus between panels",
-            "  Ctrl+\\       Toggle sidebar (works during SSH)",
+            "  Ctrl+T       Toggle terminal / file tree (during SSH)",
+            "  Ctrl+\\       Toggle sidebar",
+            "  Ctrl+H       Toggle this help panel",
             "  1-3          Quick-connect to node by index",
-            "  Ctrl+N       Return to dashboard from SSH",
             "",
             "[cyan]Cluster[/]",
             "  Ctrl+K       Set up SSH keys (runs in terminal)",
             "  Ctrl+M       View cluster manual",
             "  Ctrl+R       Refresh status bar and file tree",
-            "",
-            "[cyan]Notebooks[/]",
-            "  Ctrl+J       Launch Jupyter via SSH tunnel + euporie",
             "",
             "[cyan]Git[/]",
             "  Ctrl+G       Pick git repo path on remote (saved to config)",
@@ -245,9 +254,11 @@ class JupyterHubTUI(App):
             "    p          Pull (inside git screen)",
             "    Enter      Checkout selected branch",
             "",
+            "[cyan]Notebooks[/]",
+            "  Enter        Open .ipynb in euporie (from file tree)",
+            "",
             "[cyan]Config[/]",
             "  Ctrl+E       Edit active node details",
-            "  Ctrl+H       Show this help screen",
             "",
             "  Esc          Quit",
         ])
@@ -337,13 +348,17 @@ class JupyterHubTUI(App):
 
     def _update_status(self) -> None:
         bar = self.query_one("#status-bar", Static)
-        venv_state = venv.is_active()
-        venv_icon = "[green]VENV:ON[/]" if venv_state else "[red]VENV:OFF[/]"
         active = self._ssh.active
         if active:
             node_text = f"[cyan]CONNECTED:{active.name}[/]"
+            remote_venv = cfg.remote_venv_path(self._data)
+            if remote_venv and self._ssh.remote_venv_active(active.name, remote_venv):
+                venv_icon = "[green]VENV:ON[/]"
+            else:
+                venv_icon = "[red]VENV:OFF[/]"
         else:
             node_text = "[dim]NO CONNECTION[/]"
+            venv_icon = "[dim]VENV:---[/]"
         repo_path = cfg.git_repo_path(self._data)
         git_text = ""
         if active and repo_path != ".":
@@ -359,12 +374,12 @@ class JupyterHubTUI(App):
                     not line.startswith("##") for line in porcelain.splitlines()
                 )
                 dirty_text = "[red]*[/]" if dirty else ""
-                git_text = f"  [blue]git:{branch}{dirty_text}[/]"
+                git_text = f"  [bright_cyan]git:{branch}{dirty_text}[/]"
         elif repo_path != ".":
             gs = git_status_info(repo_path)
             if gs:
                 dirty_text = "[red]*[/]" if gs.dirty else ""
-                git_text = f"  [blue]git:{gs.branch}{dirty_text}[/]"
+                git_text = f"  [bright_cyan]git:{gs.branch}{dirty_text}[/]"
         bar.update(f" {venv_icon}  {node_text}{git_text}")
 
     def _render_welcome(self) -> None:
@@ -376,6 +391,42 @@ class JupyterHubTUI(App):
         else:
             self._content.update("Select a node to connect, or press 1/2/3.\n\n")
         self._content.focus()
+
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        # Open .ipynb files from the file tree in euporie.
+        if event.tree.id != "file-tree":
+            return
+        node = event.node
+        if node is event.tree.root:
+            return
+        label = str(node.label)
+        if not label.endswith(".ipynb"):
+            return
+        root = event.tree.root
+        if not root.data:
+            return
+        labels = []
+        cur = node
+        while cur is not None and cur is not root:
+            labels.append(str(cur.label))
+            cur = cur.parent
+        labels.reverse()
+        node_name = root.data["node"]
+        full_path = root.data["path"] + "/" + "/".join(labels)
+        self._open_notebook(node_name, full_path)
+
+    def _open_notebook(self, node_name: str, notebook_path: str) -> None:
+        from .jupyter import notebook_cmd
+        remote_venv = cfg.remote_venv_path(self._data) or "~/.venv"
+        cmd = notebook_cmd(self._ssh, node_name, notebook_path, remote_venv)
+        term = self._term
+        term.stop()
+        term.reset()
+        term.display = True
+        self._content.display = False
+        term.start(cmd)
+        term.focus()
+        self.notify(f"Opening {notebook_path}")
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if hasattr(event.list_view, "id") and event.list_view.id == "node-list":
@@ -392,27 +443,6 @@ class JupyterHubTUI(App):
             self._content.update("[red]Manual not found at docs/manual.md[/]")
             return
         self._content.update(manual_path.read_text())
-
-    def action_launch_jupyter(self) -> None:
-        if not self._ssh.active:
-            self.notify("No active node. Select a node first.", severity="warning")
-            return
-        if self._term.pty_active:
-            self.notify("Exit current session first (Ctrl+N).", severity="warning")
-            return
-        from .jupyter import launch
-        settings = cfg.jupyter_settings(self._data)
-        port = settings.get("port", 8888)
-        remote_venv = cfg.remote_venv_path(self._data) or "~/.venv"
-        cmd = launch(self._ssh, self._ssh.active.name, port, remote_venv)
-        self._content.display = False
-        term = self._term
-        term.stop()
-        term.reset()
-        term.display = True
-        term.start(cmd)
-        term.focus()
-        self.notify(f"Jupyter tunnel on localhost:{port}")
 
     def action_setup_keys(self) -> None:
         # Run key setup in the embedded terminal.
@@ -720,7 +750,9 @@ class GitBranchScreen(ModalScreen):
         lv.clear()
         for b in branches:
             prefix = "[green]*[/] " if b.startswith("*") else "   "
-            item = ListItem(Label(f"{prefix}{b}"))
+            clean = b.lstrip("*").strip()
+            item = ListItem(Label(f"{prefix}{clean}"))
+            item.data = clean
             lv.append(item)
         if not branches:
             lv.append(ListItem(Label("[dim]No branches[/]")))
@@ -748,7 +780,7 @@ class GitBranchScreen(ModalScreen):
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.list_view.id != "branch-list":
             return
-        branch = str(event.item.query_one(Label).renderable).replace("* ", "").strip()
+        branch = event.item.data
         if not branch:
             return
         node = self._ssh.active.name

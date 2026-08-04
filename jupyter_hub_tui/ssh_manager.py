@@ -11,6 +11,11 @@ from typing import Any
 from . import config as cfg
 
 
+def _control_path(name: str) -> str:
+    # Per-node socket path so each node gets its own master.
+    return f"/tmp/tui-ssh-{name}-%C"
+
+
 @dataclass
 class Node:
     name: str
@@ -61,13 +66,16 @@ class SSHManager:
         cmd = [
             "ssh", "-tt",
             "-o", "ControlMaster=auto",
-            "-o", "ControlPath=/tmp/tui-ssh-%C",
+            "-o", f"ControlPath={_control_path(name)}",
             "-o", "ControlPersist=60",
             f"{node.user}@{node.host}", "-p", str(node.port),
         ]
         if node.proxy and node.proxy in self._nodes:
             proxy = self._nodes[node.proxy]
-            cmd += ["-J", f"{proxy.user}@{proxy.host}:{proxy.port}"]
+            cmd += [
+                "-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}",
+                "-o", f"ControlPath={_control_path(node.proxy)}",
+            ]
         return cmd
 
     def command(self, name: str) -> list[str]:
@@ -103,9 +111,12 @@ class SSHManager:
         cmd = ["ssh"]
         if node.proxy and node.proxy in self._nodes:
             proxy = self._nodes[node.proxy]
-            cmd += ["-J", f"{proxy.user}@{proxy.host}:{proxy.port}"]
+            cmd += [
+                "-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}",
+                "-o", f"ControlPath={_control_path(node.proxy)}",
+            ]
         cmd += [
-            "-o", "ControlPath=/tmp/tui-ssh-%C",
+            "-o", f"ControlPath={_control_path(name)}",
             "-o", "ConnectTimeout=5",
             "-p", str(node.port), f"{node.user}@{node.host}",
         ]
@@ -213,6 +224,23 @@ class SSHManager:
             return False
         return result.returncode == 0
 
+    def remote_venv_active(self, name: str, venv_path: str) -> bool:
+        # Check if remote venv exists.
+        if not venv_path:
+            return False
+        cmd = self._ssh_prefix(name) + [
+            f"test -d {venv_path}/bin && echo yes 2>/dev/null",
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False
+        return "yes" in result.stdout
+
+    def run_in_term(self, name: str, remote_cmd: str) -> list[str]:
+        # Return raw ssh command with a remote command to run in PTY.
+        return self.raw_ssh_command(name) + [remote_cmd]
+
     def setup_keys_command(self) -> list[str]:
         # Return a shell command that generates a key and copies it to all nodes.
         # Runs in the embedded terminal so the user can enter passwords.
@@ -292,8 +320,9 @@ def _self_check() -> None:
     assert "-J" in cmd, f"proxy jump missing: {cmd}"
     raw = mgr.raw_ssh_command("worker-1")
     assert raw[0] == "ssh", f"raw command should start with ssh: {raw}"
-    assert "-J" in raw, f"proxy jump missing from raw: {raw}"
+    assert "ProxyJump" in " ".join(raw), "ProxyJump missing from raw"
     assert "ControlMaster" in " ".join(raw), "ControlMaster missing"
+    assert "tui-ssh-worker-1" in " ".join(raw), "per-node ControlPath missing"
     print("SSH self-check passed")
 
 

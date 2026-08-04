@@ -70,7 +70,7 @@ def key_to_bytes(key: str, char: str | None) -> bytes:
 # Keys that escape the terminal during SSH.
 # Each maps to an app action name.
 ESCAPE_HATCH_KEYS = {
-    "ctrl+n": "new_connection",
+    "ctrl+t": "cycle_focus",
     "ctrl+r": "refresh",
     "ctrl+m": "show_manual",
     "ctrl+k": "setup_keys",
@@ -78,9 +78,7 @@ ESCAPE_HATCH_KEYS = {
     "ctrl+h": "show_help",
     "ctrl+g": "git_picker",
     "ctrl+b": "git_branch",
-    "ctrl+o": "git_checkout",
     "ctrl+backslash": "toggle_sidebar",
-    "ctrl+j": "launch_jupyter",
 }
 
 
@@ -114,6 +112,7 @@ class TerminalDisplay(Widget):
         self._pid: Optional[int] = None
         self._pty_running = False
         self._poll_timer = None
+        self._command: list[str] = []
 
     @property
     def pty_active(self) -> bool:
@@ -136,11 +135,20 @@ class TerminalDisplay(Widget):
 
     def start(self, command: list[str]) -> None:
         self._pty_running = True
+        self._command = command
+        # Defer pty.fork until after the widget has real dimensions.
+        # Calling on_mount or compose leaves size at 0x0, so SSH MOTD
+        # fills a tiny 80x24 screen and the prompt scrolls off.
+        self.call_after_refresh(self._do_start)
+
+    def _do_start(self) -> None:
+        if not self._pty_running:
+            return
         self._pid, self._master_fd = pty.fork()
         if self._pid == 0:
             env = os.environ.copy()
             env["TERM"] = "xterm-256color"
-            os.execvpe(command[0], command, env)
+            os.execvpe(self._command[0], self._command, env)
         else:
             flags = fcntl.fcntl(self._master_fd, fcntl.F_GETFL)
             fcntl.fcntl(self._master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
