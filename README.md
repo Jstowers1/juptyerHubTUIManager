@@ -5,20 +5,46 @@ Replaces JupyterHub dependency for SSH, git, venv, and notebook workflows.
 
 ## Setup
 
-1. Copy `config.example.json` to `config.json`.
-2. Fill in your cluster node details.
-3. Install dependencies: `pip install textual`
-4. Run: `python -m jupyter_hub_tui`
+1. Clone the repo.
+2. Create a venv: `python3 -m venv .venv && source .venv/bin/activate`
+3. Install dependencies: `pip install -r requirements.txt`
+4. Copy `config.example.json` to `config.json`.
+5. Fill in your cluster node details.
+6. Run: `python -m jupyter_hub_tui`
+
+## Controls
+
+| Key | Action |
+|-----|--------|
+| `1` | Connect to pub node |
+| `2` | Connect to cobalt node |
+| `3` | Connect to npx-submitter node |
+| `e` | Edit active node details (host, user, port, proxy) |
+| `m` | View cluster manual |
+| `j` | Launch Jupyter on active node (SSH tunnel + euporie) |
+| `r` | Refresh status bar |
+| `q` | Quit |
+
+Node selection also works by arrow-navigating the list and pressing Enter.
+
+## Status bar
+
+The bottom bar shows venv state, active node, and git branch/dirty status:
+
+```
+ VENV:ON  CONNECTED:cobalt  git:main*
+```
 
 ## Config
 
 `config.json` holds node connection details, venv path, and Jupyter settings.
 This file is gitignored. `config.example.json` is the template for peers.
 
-## Features
+Node configs support a `proxy` field for jump hosts. Cobalt and npx-submitter
+route through pub automatically via SSH `ProxyJump`.
 
-- SSH connection manager with quick-switch between nodes
-- Venv activation status indicator
-- Git status overview
-- Offline cluster manual rendered in-app
-- Jupyter notebook launch with browser handoff
+## Notes
+
+- Run inside kitty for inline notebook graphics via euporie.
+- The SSH manager auto-detects kitty and uses `kitty +kitten ssh` to copy
+  terminfo to the remote host.
