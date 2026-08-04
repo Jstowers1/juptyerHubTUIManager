@@ -144,8 +144,18 @@ class TerminalDisplay(Widget):
     def _do_start(self) -> None:
         if not self._pty_running:
             return
+        w = max(1, self.size.width)
+        h = max(1, self.size.height)
+        self._screen.resize(h, w)
         self._pid, self._master_fd = pty.fork()
         if self._pid == 0:
+            # Set PTY size before exec so SSH reads correct dimensions.
+            # Without this, SSH formats output for the default 80x24.
+            winsize = struct.pack("HHHH", h, w, 0, 0)
+            try:
+                fcntl.ioctl(1, termios.TIOCSWINSZ, winsize)
+            except OSError:
+                pass
             env = os.environ.copy()
             env["TERM"] = "xterm-256color"
             os.execvpe(self._command[0], self._command, env)
