@@ -144,9 +144,12 @@ class JupyterHubTUI(App):
     def _term(self) -> TerminalDisplay:
         return self.query_one("#term-display", TerminalDisplay)
 
+    # Keys that bypass the terminal even during SSH sessions.
+    _ESCAPE_KEYS = frozenset({"ctrl+n"})
+
     def on_key(self, event) -> None:
-        # Forward keys to terminal when it is running.
-        if self._term.is_running:
+        # Forward keys to terminal when running, except escape hatches.
+        if self._term.is_running and event.key not in self._ESCAPE_KEYS:
             self._term.send_key(event.key, event.character)
             event.prevent_default()
             event.stop()
