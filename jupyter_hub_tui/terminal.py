@@ -169,6 +169,13 @@ class TerminalDisplay(Widget):
             self._resize_pty()
             self._poll_timer = self.set_interval(0.05, self._poll_pty)
 
+    def send_input(self, data: str) -> None:
+        if self._master_fd is not None and self._pty_running:
+            try:
+                os.write(self._master_fd, data.encode())
+            except OSError:
+                pass
+
     def send_key(self, key: str, char: str | None) -> None:
         data = key_to_bytes(key, char)
         if data and self._master_fd is not None and self._pty_running:

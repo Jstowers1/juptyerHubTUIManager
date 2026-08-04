@@ -9,7 +9,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Header, Static, ListView, ListItem, Label
-from textual.widgets import Input, Button, Tree
+from textual.widgets import Input, Button, Tree, RichLog
 
 from . import config as cfg
 from . import venv
@@ -68,7 +68,12 @@ Screen {
     background: $surface;
     padding: 0 1;
     overflow-y: auto;
-    border-top: solid $primary;
+    border: solid $primary;
+}
+
+#help-panel:focus {
+    border: solid $accent;
+    background: $boost;
 }
 
 .node-list-label {
@@ -107,6 +112,10 @@ class FocusableStatic(Static):
     can_focus = True
 
 
+class FocusableLog(RichLog):
+    can_focus = True
+
+
 class JupyterHubTUI(App):
 
     TITLE = "Jupyter Hub TUI"
@@ -140,7 +149,7 @@ class JupyterHubTUI(App):
         yield Header()
         with Horizontal():
             with Vertical(id="left-panel"):
-                yield FocusableStatic(self._help_text(), id="help-panel")
+                yield FocusableLog(id="help-panel")
                 yield Label("Cluster Nodes", classes="node-list-label")
                 yield ListView(id="node-list")
                 yield Label("", id="ssh-command-display")
@@ -158,6 +167,39 @@ class JupyterHubTUI(App):
         self._render_welcome()
         self._populate_file_tree()
         self._node_names = list(self._ssh.nodes.keys())
+        self._populate_help()
+
+    def _populate_help(self) -> None:
+        hp = self.query_one("#help-panel", FocusableLog)
+        hp.clear()
+        hp.write("[bold]Keybindings[/]")
+        hp.write("")
+        hp.write("[cyan]Navigation[/]")
+        hp.write("  Tab          Cycle sidebar widgets")
+        hp.write("  Ctrl+T       Toggle terminal / sidebar (SSH)")
+        hp.write("  Ctrl+\\       Toggle sidebar")
+        hp.write("  Ctrl+H       Toggle this help panel")
+        hp.write("  1-3          Quick-connect to node")
+        hp.write("")
+        hp.write("[cyan]Cluster[/]")
+        hp.write("  Ctrl+K       Set up SSH keys")
+        hp.write("  Ctrl+M       View cluster manual")
+        hp.write("  Ctrl+R       Refresh status / file tree")
+        hp.write("")
+        hp.write("[cyan]Git[/]")
+        hp.write("  Ctrl+G       Pick git repo path (remote)")
+        hp.write("  Ctrl+B       Git screen: log, branches, fetch, pull, checkout")
+        hp.write("    f          Fetch (inside git screen)")
+        hp.write("    p          Pull (inside git screen)")
+        hp.write("    Enter      Checkout branch")
+        hp.write("")
+        hp.write("[cyan]Notebooks[/]")
+        hp.write("  Enter        Open .ipynb in euporie (file tree)")
+        hp.write("")
+        hp.write("[cyan]Config[/]")
+        hp.write("  Ctrl+E       Edit active node")
+        hp.write("")
+        hp.write("  Esc          Quit")
 
     @property
     def _term(self) -> TerminalDisplay:
@@ -177,10 +219,9 @@ class JupyterHubTUI(App):
             self.notify(f"Unknown node: {name}", severity="error")
             return
         node = self._ssh.set_active(name)
-        self._update_status()
+        self.notify(f"Connecting to: {node.name} ({node.host})")
         cmd_display = self.query_one("#ssh-command-display", Label)
         cmd_display.update(f"[dim]$ {self._ssh.command_str(name)}[/]")
-        self.notify(f"Connecting to: {node.name} ({node.host})")
         self._content.display = False
         term = self._term
         term.stop()
@@ -189,7 +230,72 @@ class JupyterHubTUI(App):
         cmd = self._ssh.launch(name)
         term.start(cmd)
         term.focus()
-        self.call_later(self._populate_file_tree)
+        # Run blocking SSH commands in a worker thread so they
+        # don't freeze the event loop during password entry.
+        self.run_worker(self._bg_update_after_connect(), exclusive=True)
+
+    async def _bg_update_after_connect(self) -> None:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        active = self._ssh.active
+        if not active:
+            return
+        repo_path = cfg.git_repo_path(self._data)
+        file_entries = await loop.run_in_executor(
+            None, self._fetch_file_entries, active.name, repo_path)
+        status_info = await loop.run_in_executor(
+            None, self._fetch_status_info, active.name, repo_path)
+        self.call_from_thread(self._apply_file_tree, file_entries)
+        self.call_from_thread(self._apply_status_bar, status_info)
+
+    def _fetch_file_entries(self, node_name: str, repo_path: str) -> list[dict]:
+        browse = repo_path if repo_path != "." else "~"
+        try:
+            return self._ssh.list_remote_dir(node_name, browse)
+        except Exception:
+            return []
+
+    def _fetch_status_info(self, node_name: str, repo_path: str) -> dict:
+        remote_venv = cfg.remote_venv_path(self._data)
+        venv_on = False
+        if remote_venv:
+            try:
+                venv_on = self._ssh.remote_venv_active(node_name, remote_venv)
+            except Exception:
+                pass
+        git_porcelain = ""
+        if repo_path != ".":
+            try:
+                git_porcelain = self._ssh.remote_git_status(node_name, repo_path)
+            except Exception:
+                pass
+        return {"venv_on": venv_on, "git_porcelain": git_porcelain}
+
+    def _apply_file_tree(self, entries: list[dict]) -> None:
+        active = self._ssh.active
+        if not active:
+            return
+        tree = self.query_one("#file-tree", Tree)
+        tree.clear()
+        repo_path = cfg.git_repo_path(self._data)
+        browse_path = repo_path if repo_path != "." else "~"
+        tree.root.set_label(f"{active.name}:{browse_path}")
+        tree.root.data = {"node": active.name, "path": browse_path}
+        if not entries:
+            tree.root.add_leaf("[dim](empty)[/]")
+        for e in entries:
+            tree.root.add(e["name"], allow_expand=e["is_dir"])
+        tree.root.expand()
+
+    def _apply_status_bar(self, info: dict) -> None:
+        active = self._ssh.active
+        if not active:
+            return
+        bar = self.query_one("#status-bar", Static)
+        node_text = f"[cyan]CONNECTED:{active.name}[/]"
+        venv_icon = "[green]VENV:ON[/]" if info["venv_on"] else "[red]VENV:OFF[/]"
+        git_text = self._parse_git_status(info["git_porcelain"])
+        bar.update(f" {venv_icon}  {node_text}{git_text}")
 
     def on_terminal_display_exited(self, event: TerminalDisplay.Exited) -> None:
         self._ssh._active = None
@@ -238,39 +344,6 @@ class JupyterHubTUI(App):
         help_panel = self.query_one("#help-panel")
         help_panel.display = not help_panel.display
         self._term._resize_pty()
-
-    @staticmethod
-    def _help_text() -> str:
-        return "\n".join([
-            "[bold]Keybindings[/]",
-            "",
-            "[cyan]Navigation[/]",
-            "  Tab          Toggle focus between panels",
-            "  Ctrl+T       Toggle terminal / file tree (during SSH)",
-            "  Ctrl+\\       Toggle sidebar",
-            "  Ctrl+H       Toggle this help panel",
-            "  1-3          Quick-connect to node by index",
-            "",
-            "[cyan]Cluster[/]",
-            "  Ctrl+K       Set up SSH keys (runs in terminal)",
-            "  Ctrl+M       View cluster manual",
-            "  Ctrl+R       Refresh status bar and file tree",
-            "",
-            "[cyan]Git[/]",
-            "  Ctrl+G       Pick git repo path on remote (saved to config)",
-            "  Ctrl+B       Git screen: status, log, branches, fetch, pull, checkout",
-            "    f          Fetch (inside git screen)",
-            "    p          Pull (inside git screen)",
-            "    Enter      Checkout selected branch",
-            "",
-            "[cyan]Notebooks[/]",
-            "  Enter        Open .ipynb in euporie (from file tree)",
-            "",
-            "[cyan]Config[/]",
-            "  Ctrl+E       Edit active node details",
-            "",
-            "  Esc          Quit",
-        ])
 
     def action_git_picker(self) -> None:
         if self._term.pty_active:
@@ -355,6 +428,21 @@ class JupyterHubTUI(App):
         for e in entries:
             node.add(e["name"], allow_expand=e["is_dir"])
 
+    def _parse_git_status(self, porcelain: str) -> str:
+        if not porcelain:
+            return ""
+        first_line = porcelain.splitlines()[0]
+        branch = ""
+        if "..." in first_line:
+            branch = first_line.split("...")[0].replace("## ", "")
+        elif "No commits yet" not in first_line:
+            branch = first_line.replace("## ", "").split("...")[0]
+        dirty = any(
+            not line.startswith("##") for line in porcelain.splitlines()
+        )
+        dirty_text = "[red]*[/]" if dirty else ""
+        return f"  [bright_cyan]git:{branch}{dirty_text}[/]"
+
     def _update_status(self) -> None:
         bar = self.query_one("#status-bar", Static)
         active = self._ssh.active
@@ -371,19 +459,8 @@ class JupyterHubTUI(App):
         repo_path = cfg.git_repo_path(self._data)
         git_text = ""
         if active and repo_path != ".":
-            porcelain = self._ssh.remote_git_status(active.name, repo_path)
-            if porcelain:
-                first_line = porcelain.splitlines()[0]
-                branch = ""
-                if "..." in first_line:
-                    branch = first_line.split("...")[0].replace("## ", "")
-                elif "No commits yet" not in first_line:
-                    branch = first_line.replace("## ", "").split("...")[0]
-                dirty = any(
-                    not line.startswith("##") for line in porcelain.splitlines()
-                )
-                dirty_text = "[red]*[/]" if dirty else ""
-                git_text = f"  [bright_cyan]git:{branch}{dirty_text}[/]"
+            git_text = self._parse_git_status(
+                self._ssh.remote_git_status(active.name, repo_path) or "")
         elif repo_path != ".":
             gs = git_status_info(repo_path)
             if gs:
@@ -425,16 +502,13 @@ class JupyterHubTUI(App):
         self._open_notebook(node_name, full_path)
 
     def _open_notebook(self, node_name: str, notebook_path: str) -> None:
-        from .jupyter import notebook_cmd
+        if not self._term.pty_active:
+            self.notify("No active SSH session.", severity="warning")
+            return
         remote_venv = cfg.remote_venv_path(self._data) or "~/.venv"
-        cmd = notebook_cmd(self._ssh, node_name, notebook_path, remote_venv)
-        term = self._term
-        term.stop()
-        term.reset()
-        term.display = True
-        self._content.display = False
-        term.start(cmd)
-        term.focus()
+        cmd = f"source {remote_venv}/bin/activate 2>/dev/null; euporie notebook {notebook_path}\n"
+        self._term.send_input(cmd)
+        self._term.focus()
         self.notify(f"Opening {notebook_path}")
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
