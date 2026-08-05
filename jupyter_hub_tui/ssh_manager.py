@@ -38,6 +38,7 @@ class SSHManager:
                 proxy=info.get("proxy"),
             )
         self._active: str | None = None
+        self._last_error: str | None = None
 
     @property
     def nodes(self) -> dict[str, Node]:
@@ -272,7 +273,9 @@ class SSHManager:
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return None
         if result.returncode != 0:
+            self._last_error = result.stderr.decode(errors="replace").strip()
             return None
+        self._last_error = None
         return result.stdout
 
     def write_remote_file(self, name: str, path: str, data: bytes) -> bool:

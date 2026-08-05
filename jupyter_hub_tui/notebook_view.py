@@ -217,7 +217,8 @@ class NotebookView(Widget):
             self.remote_path,
         )
         if raw is None:
-            status.update("[red]Failed to load notebook[/]")
+            err = self._ssh._last_error or "unknown"
+            status.update(f"[red]Failed to load notebook: {err}[/]")
             return
         nb = nbformat.reads(raw.decode(), as_version=4)
         self._cells = []
