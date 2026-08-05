@@ -294,20 +294,33 @@ class TerminalDisplay(Widget):
     PYTE_TO_RICH = {
         "default": "",
         "brown": "yellow",
+        "brightblack": "grey50",
+        "brightred": "bright_red",
+        "brightgreen": "bright_green",
+        "brightbrown": "bright_yellow",
+        "brightblue": "bright_blue",
+        "brightmagenta": "bright_magenta",
+        "brightcyan": "bright_cyan",
+        "brightwhite": "bright_white",
     }
+
+    def _pyte_color(self, val: str) -> str:
+        mapped = self.PYTE_TO_RICH.get(val, val)
+        if mapped and mapped != "default":
+            if all(c in "0123456789abcdef" for c in mapped) and len(mapped) == 6:
+                return f"#{mapped}"
+        return mapped
 
     def _cell_style(self, cell, row: int, cursor_y: int) -> str:
         if cell.reverse:
             fg, bg = cell.bg, cell.fg
         else:
             fg, bg = cell.fg, cell.bg
-        fg = self.PYTE_TO_RICH.get(fg, fg)
-        bg = self.PYTE_TO_RICH.get(bg, bg)
         parts = []
         if fg and fg != "default":
-            parts.append(fg)
+            parts.append(self._pyte_color(fg))
         if bg and bg != "default":
-            parts.append(f"on {bg}")
+            parts.append("on " + self._pyte_color(bg))
         if cell.bold:
             parts.append("bold")
         if cell.italics:
@@ -316,19 +329,20 @@ class TerminalDisplay(Widget):
             parts.append("underline")
         if cell.strikethrough:
             parts.append("strike")
-        if row == cursor_y and self._pty_running:
-            parts.append("reverse")
         return " ".join(parts)
 
     def _render_row(self, y: int, cursor_y: int) -> Text:
         row_line = self._screen.buffer[y]
-        cursor_x = self._screen.cursor.x if y == cursor_y and self._pty_running else -1
+        is_cursor_row = (y == cursor_y and self._pty_running)
+        cursor_x = self._screen.cursor.x if is_cursor_row else -1
         parts = []
         run_text = ""
         run_style = None
         for x in range(self._screen.columns):
             cell = row_line[x]
             style = self._cell_style(cell, y, cursor_y)
+            if x == cursor_x:
+                style = (style + " reverse") if style else "reverse"
             char = cell.data if cell.data else " "
             if style != run_style:
                 if run_text:
