@@ -1,3 +1,8 @@
 textual>=8.2
-euporie>=2.10
 pyte>=0.8
+nbformat>=5.10
+jupyter-client>=8.9
+ipykernel>=7.0
+pyzmq>=25.0
+textual-image>=0.5
+pillow>=10.0

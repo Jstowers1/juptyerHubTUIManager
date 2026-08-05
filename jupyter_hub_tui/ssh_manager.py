@@ -293,6 +293,30 @@ class SSHManager:
             return False
         return result.returncode == 0
 
+    def read_remote_file(self, name: str, path: str) -> bytes | None:
+        # Read a remote file via SSH cat. Returns None on failure.
+        cmd = self._ssh_prefix(name) + [f"cat {shlex.quote(path)}"]
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, timeout=15
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return None
+        if result.returncode != 0:
+            return None
+        return result.stdout
+
+    def write_remote_file(self, name: str, path: str, data: bytes) -> bool:
+        # Write a remote file via SSH stdin redirect.
+        cmd = self._ssh_prefix(name) + [f"cat > {shlex.quote(path)}"]
+        try:
+            result = subprocess.run(
+                cmd, input=data, capture_output=True, timeout=15
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False
+        return result.returncode == 0
+
     def setup_keys_command(self) -> list[str]:
         # Return a shell command that generates a key and copies it to all nodes.
         # Runs in the embedded terminal so the user can enter passwords.

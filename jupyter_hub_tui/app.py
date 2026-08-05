@@ -17,6 +17,7 @@ from textual.widgets import TabbedContent, TabPane
 from . import config as cfg
 from .ssh_manager import SSHManager
 from .terminal import TerminalDisplay
+from .notebook_view import NotebookView
 
 
 CSS = """
@@ -224,29 +225,16 @@ class JupyterHubTUI(App):
         hp.write("    Enter      Checkout branch")
         hp.write("")
         hp.write("[cyan]Notebooks[/]")
-        hp.write("  Enter        Open .ipynb in new tab (remote euporie)")
+        hp.write("  Enter        Open .ipynb in new tab (custom notebook viewer)")
         hp.write("  Ctrl+W       Close notebook tab")
         hp.write("  Ctrl+Left    Previous tab")
         hp.write("  Ctrl+Right   Next tab")
         hp.write("")
-        hp.write("[cyan]Euporie (command mode)[/]")
-        hp.write("  Ctrl+E       Run cell (use this)")
+        hp.write("[cyan]Notebook Cells[/]")
+        hp.write("  Ctrl+E       Run cell")
         hp.write("  Ctrl+R       Run cell, select next")
-        hp.write("  Enter        Edit cell")
-        hp.write("  a            Insert cell above")
-        hp.write("  b            Insert cell below")
-        hp.write("  dd           Delete cell")
-        hp.write("  m            Cell to markdown")
-        hp.write("  y            Cell to code")
-        hp.write("  k / up       Select previous cell")
-        hp.write("  j / down     Select next cell")
-        hp.write("  z            Undelete cell")
-        hp.write("  x            Cut cell")
-        hp.write("  v            Paste cell")
-        hp.write("  ii           Interrupt kernel")
-        hp.write("  00           Restart kernel")
-        hp.write("  Esc          Exit edit mode")
-        hp.write("  Alt+S        Save notebook")
+        hp.write("  Ctrl+S       Save notebook")
+        hp.write("  Ctrl+I       Interrupt kernel")
         hp.write("")
         hp.write("[cyan]Config[/]")
         hp.write("  Ctrl+E       Edit active node")
@@ -409,8 +397,13 @@ class JupyterHubTUI(App):
         if not active or active == "terminal-tab":
             self.notify("Can't close terminal tab.", severity="warning")
             return
-        term = self._active_term()
-        term.stop()
+        # Shut down kernel if this is a notebook tab.
+        try:
+            pane = tabs.get_pane(active)
+            nb = pane.query_one(NotebookView)
+            nb.shutdown_kernel()
+        except Exception:
+            pass
         tabs.remove_pane(active)
         tabs.active = "terminal-tab"
         self._term.focus()
@@ -603,17 +596,19 @@ class JupyterHubTUI(App):
             self.notify("No active SSH session.", severity="warning")
             return
         basename = notebook_path.rsplit("/", 1)[-1]
-        ssh_cmd = self._ssh.raw_ssh_command_for_notebook(node_name, notebook_path)
         self._nb_counter += 1
         tab_id = f"nb-tab-{self._nb_counter}"
         tabs = self.query_one("#term-tabs", TabbedContent)
-        term = TerminalDisplay()
-        term.notebook_mode = True
-        pane = TabPane(basename, term, id=tab_id)
+        nb_view = NotebookView(
+            remote_path=notebook_path,
+            node_name=node_name,
+            ssh=self._ssh,
+            config=self._data,
+        )
+        pane = TabPane(basename, nb_view, id=tab_id)
         tabs.add_pane(pane)
         tabs.active = tab_id
-        term.start(ssh_cmd)
-        term.focus()
+        nb_view.focus()
         self.notify(f"Opening {basename}...")
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
