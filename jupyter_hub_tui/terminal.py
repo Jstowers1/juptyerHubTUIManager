@@ -235,42 +235,13 @@ class TerminalDisplay(Widget):
             self._poll_timer.stop()
             self._poll_timer = None
 
-    def _passthrough_kitty_graphics(self, text: str) -> str:
-        # Split at APC boundaries. Feed text chunks to pyte as we go,
-        # so pyte's cursor is at the right position when we emit each APC.
+    def _strip_apc(self, text: str) -> str:
+        # Strip kitty APC sequences so base64 data does not leak into pyte.
         if "\x1b_G" not in text:
             return text
-        import os
         import re
-        apc_re = re.compile(r"(\x1b_G.*?\x1b\\)", re.DOTALL)
-        parts = apc_re.split(text)
-        clean_parts = []
-        for part in parts:
-            if part.startswith("\x1b_G"):
-                self._emit_apc_with_cursor(part)
-            else:
-                self._stream.feed(part)
-                clean_parts.append(part)
-        return ""
-
-    def _emit_apc_with_cursor(self, apc: str) -> None:
-        import os
-        region = self.region
-        if region is None:
-            return
-        cy = self._screen.cursor.y
-        cx = self._screen.cursor.x
-        abs_row = region.y + cy + 1
-        abs_col = region.x + cx + 1
-        pos = f"\x1b[{abs_row};{abs_col}H"
-        try:
-            fd = os.open("/dev/tty", os.O_WRONLY)
-            try:
-                os.write(fd, (pos + apc).encode("utf-8"))
-            finally:
-                os.close(fd)
-        except OSError:
-            pass
+        apc_re = re.compile(r"\x1b_G.*?\x1b\\", re.DOTALL)
+        return apc_re.sub("", text)
 
     def _poll_pty(self) -> None:
         if not self._pty_running or self._master_fd is None:
@@ -297,7 +268,7 @@ class TerminalDisplay(Widget):
             if not self._overlay_done:
                 self._overlay_done = True
             text = b"".join(chunks).decode("utf-8", errors="replace")
-            text = self._passthrough_kitty_graphics(text)
+            text = self._strip_apc(text)
             if text:
                 self._stream.feed(text)
             self._refresh_display()

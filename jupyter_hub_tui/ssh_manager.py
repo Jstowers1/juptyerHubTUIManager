@@ -107,7 +107,7 @@ class SSHManager:
         kernel_fix = "python -m ipykernel install --user --name python3 --display-name Python3 >/dev/null 2>&1"
         # Build euporie command with graphics and pythonpath.
         graphics = cfg.venv_euporie_graphics(self._data)
-        euporie_cmd = f"{euporie} notebook {nb} --graphics {shlex.quote(graphics)} --force-graphics"
+        euporie_cmd = f"{euporie} notebook {nb} --graphics {shlex.quote(graphics)}"
         pythonpath = cfg.venv_pythonpath(self._data)
         if pythonpath:
             euporie_cmd = f"PYTHONPATH={shlex.quote(pythonpath)} {euporie_cmd}"
