@@ -70,7 +70,7 @@ class RemoteKernel:
         self._conn_file = f"/tmp/jhtui-kernel-{int(time.time() * 1000)}.json"
         launcher = (
             prefix
-            + f"python -m ipykernel_launcher --ip=127.0.0.1 --f={self._conn_file}"
+            + f"python -m ipykernel_launcher -f {self._conn_file}"
         )
         cmd = self._ssh._ssh_prefix(self._node) + [launcher]
         self._kernel_proc = subprocess.Popen(
