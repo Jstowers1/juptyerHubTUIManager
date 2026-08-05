@@ -155,7 +155,11 @@ class RemoteKernel:
             kc.wait_for_ready(timeout=timeout)
         except Exception as e:
             kc.stop_channels()
-            raise RuntimeError(f"kernel not ready: {e}") from e
+            err = self._read_remote_stderr()
+            raise RuntimeError(
+                f"kernel not ready: {e}"
+                + (f"\nremote stderr:\n{err}" if err else "\n(no remote stderr)")
+            ) from e
         self._kc = kc
 
     def execute(self, code: str, timeout: int = 60) -> CellResult:
