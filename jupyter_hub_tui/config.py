@@ -46,6 +46,14 @@ def venv_euporie_cmd(data: dict[str, Any]) -> str:
     return data.get("venv", {}).get("euporie_cmd", "euporie")
 
 
+def venv_pythonpath(data: dict[str, Any]) -> str:
+    return data.get("venv", {}).get("pythonpath", "")
+
+
+def venv_euporie_graphics(data: dict[str, Any]) -> str:
+    return data.get("venv", {}).get("euporie_graphics", "none")
+
+
 def git_repo_path(data: dict[str, Any]) -> str:
     return data.get("git", {}).get("repo_path", ".")
 

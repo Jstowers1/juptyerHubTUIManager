@@ -105,8 +105,13 @@ class SSHManager:
         repo = cfg.git_repo_path(self._data)
         # Re-register kernel from venv so kernel spec points to venv Python.
         kernel_fix = "python -m ipykernel install --user --name python3 --display-name Python3 >/dev/null 2>&1"
-        # PYTHONPATH=repo so local modules resolve before site-packages.
-        parts = [p for p in [venv_cmd, kernel_fix, f"PYTHONPATH={shlex.quote(repo)} {euporie} notebook {nb}"] if p]
+        # Build euporie command with graphics and pythonpath.
+        graphics = cfg.venv_euporie_graphics(self._data)
+        euporie_cmd = f"{euporie} notebook {nb} --graphics {shlex.quote(graphics)}"
+        pythonpath = cfg.venv_pythonpath(self._data)
+        if pythonpath:
+            euporie_cmd = f"PYTHONPATH={shlex.quote(pythonpath)} {euporie_cmd}"
+        parts = [p for p in [venv_cmd, kernel_fix, euporie_cmd] if p]
         remote_cmd = " && ".join(parts)
         cmd = [
             "ssh", "-tt",

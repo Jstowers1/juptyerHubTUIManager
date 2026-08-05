@@ -30,6 +30,8 @@
   },
   "venv": {
     "activate_cmd": "source ~/.bashrc && icetop-cnn",
-    "euporie_cmd": "~/.local/share/virtualenvs/icetop-cnn/bin/euporie"
+    "euporie_cmd": "~/.local/share/virtualenvs/icetop-cnn/bin/euporie",
+    "pythonpath": "/home/youruser/icetop-cnn",
+    "euporie_graphics": "none"
   }
 }
