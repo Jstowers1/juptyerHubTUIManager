@@ -60,6 +60,11 @@ class CellCard(Widget):
     CellCard .cell-output.has-content {
         display: block;
     }
+    CellCard .cell-images {
+        height: auto;
+        min-height: 0;
+        padding: 0 1;
+    }
     CellCard .cell-type-badge {
         dock: top;
         width: auto;
@@ -88,6 +93,7 @@ class CellCard(Widget):
         yield editor
         output = Static("", classes="cell-output")
         yield output
+        yield VerticalScroll(classes="cell-images")
 
     def on_mount(self) -> None:
         self._render_output()
@@ -118,6 +124,7 @@ class CellCard(Widget):
             out = self.query_one(".cell-output", Static)
         except Exception:
             return
+        import re
         parts: list[str] = []
         if self.cell.running:
             parts.append("[dim italic]running...[/]")
@@ -128,7 +135,9 @@ class CellCard(Widget):
             if r.stderr:
                 parts.append(f"[red]{r.stderr.rstrip()}[/]")
             if r.error:
-                parts.append(f"[bold red]{r.error}[/]")
+                # Strip ANSI color codes that break Textual markup parser.
+                clean = re.sub(r"\x1b\[[0-9;]*m", "", r.error)
+                parts.append(f"[bold red]{clean}[/]")
             n_imgs = len(r.images)
             if n_imgs:
                 parts.append(f"[dim][{n_imgs} image(s) below][/]")
@@ -341,7 +350,6 @@ class NotebookView(Widget):
             self._focus_cell(self._active_cell + 1)
 
     def _refresh_images(self) -> None:
-        # Walk all cards, render images into output areas via TGPImage.
         try:
             from textual_image.widget import TGPImage
             from PIL import Image
@@ -353,16 +361,15 @@ class NotebookView(Widget):
             if not images:
                 continue
             try:
-                out = card.query_one(".cell-output", Static)
+                container = card.query_one(".cell-images", VerticalScroll)
             except Exception:
                 continue
-            # Clear and mount image widgets below the text output.
-            for child in list(out.children):
+            for child in list(container.children):
                 child.remove()
             for img_bytes in images:
                 try:
                     img = Image.open(io.BytesIO(img_bytes))
-                    out.mount(TGPImage(img))
+                    container.mount(TGPImage(img))
                 except Exception:
                     pass
 

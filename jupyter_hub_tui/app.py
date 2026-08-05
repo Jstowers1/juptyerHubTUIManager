@@ -417,7 +417,6 @@ class JupyterHubTUI(App):
         if not active or active == "terminal-tab":
             self.notify("Can't close terminal tab.", severity="warning")
             return
-        # Shut down kernel if this is a notebook tab.
         try:
             pane = tabs.get_pane(active)
             nb = pane.query_one(NotebookView)
@@ -426,6 +425,7 @@ class JupyterHubTUI(App):
             pass
         tabs.remove_pane(active)
         tabs.active = "terminal-tab"
+        self._term.resume_polling()
         self._term.focus()
 
     def action_prev_tab(self) -> None:
@@ -436,7 +436,9 @@ class JupyterHubTUI(App):
         if len(ids) <= 1:
             return
         i = ids.index(tabs.active) if tabs.active in ids else 0
-        tabs.active = ids[(i - 1) % len(ids)]
+        new_id = ids[(i - 1) % len(ids)]
+        tabs.active = new_id
+        self._sync_term_polling(new_id)
         self._active_term().focus()
 
     def action_next_tab(self) -> None:
@@ -447,8 +449,16 @@ class JupyterHubTUI(App):
         if len(ids) <= 1:
             return
         i = ids.index(tabs.active) if tabs.active in ids else 0
-        tabs.active = ids[(i + 1) % len(ids)]
+        new_id = ids[(i + 1) % len(ids)]
+        tabs.active = new_id
+        self._sync_term_polling(new_id)
         self._active_term().focus()
+
+    def _sync_term_polling(self, active_tab_id: str | None) -> None:
+        if active_tab_id == "terminal-tab":
+            self._term.resume_polling()
+        else:
+            self._term.pause_polling()
 
     def action_cycle_focus(self) -> None:
         # Tab: Dashboard cycles left panel <-> content.
@@ -629,6 +639,7 @@ class JupyterHubTUI(App):
         pane = TabPane(basename, nb_view, id=tab_id)
         tabs.add_pane(pane)
         tabs.active = tab_id
+        self._term.pause_polling()
         nb_view.focus()
         self.notify(f"Opening {basename}...")
 
