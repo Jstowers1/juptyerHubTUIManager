@@ -19,9 +19,11 @@ from textual.widget import Widget
 
 
 def key_to_bytes(key: str, char: str | None) -> bytes:
-    # Map Textual key names to terminal byte sequences.
     special = {
         "enter": b"\r",
+        "shift+enter": b"\x1b\r",
+        "ctrl+enter": b"\r",
+        "alt+enter": b"\x1b\r",
         "tab": b"\t",
         "escape": b"\x1b",
         "backspace": b"\x7f",
