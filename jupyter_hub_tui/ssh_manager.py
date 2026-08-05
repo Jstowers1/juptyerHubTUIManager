@@ -263,9 +263,18 @@ class SSHManager:
             return False
         return result.returncode == 0
 
+    def _quote_remote_path(self, path: str) -> str:
+        # Quote a path for remote shell, keeping ~ expansion.
+        if path == "~":
+            return "~"
+        if path.startswith("~/"):
+            return "~/" + shlex.quote(path[2:])
+        return shlex.quote(path)
+
     def read_remote_file(self, name: str, path: str) -> bytes | None:
         # Read a remote file via SSH cat. Returns None on failure.
-        cmd = self._ssh_prefix(name) + [f"cat {shlex.quote(path)}"]
+        qpath = self._quote_remote_path(path)
+        cmd = self._ssh_prefix(name) + [f"cat {qpath}"]
         try:
             result = subprocess.run(
                 cmd, capture_output=True, timeout=15
@@ -280,7 +289,8 @@ class SSHManager:
 
     def write_remote_file(self, name: str, path: str, data: bytes) -> bool:
         # Write a remote file via SSH stdin redirect.
-        cmd = self._ssh_prefix(name) + [f"cat > {shlex.quote(path)}"]
+        qpath = self._quote_remote_path(path)
+        cmd = self._ssh_prefix(name) + [f"cat > {qpath}"]
         try:
             result = subprocess.run(
                 cmd, input=data, capture_output=True, timeout=15
