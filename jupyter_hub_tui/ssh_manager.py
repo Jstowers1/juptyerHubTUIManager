@@ -102,7 +102,10 @@ class SSHManager:
         venv_cmd = cfg.venv_activate_cmd(self._data)
         euporie = cfg.venv_euporie_cmd(self._data)
         nb = shlex.quote(notebook_path)
-        remote_cmd = f"{venv_cmd} && {euporie} notebook {nb}" if venv_cmd else f"{euporie} notebook {nb}"
+        # Re-register kernel from venv so kernel spec points to venv Python.
+        kernel_fix = "python -m ipykernel install --user --name python3 --display-name Python3 >/dev/null 2>&1"
+        parts = [p for p in [venv_cmd, kernel_fix, f"{euporie} notebook {nb}"] if p]
+        remote_cmd = " && ".join(parts)
         cmd = [
             "ssh", "-tt",
             "-o", f"ControlMaster=auto",
