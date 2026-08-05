@@ -68,9 +68,12 @@ class RemoteKernel:
         parts = [p for p in [self._venv_cmd, pp] if p]
         prefix = " && ".join(parts) + " && " if parts else ""
         self._conn_file = f"/tmp/jhtui-kernel-{int(time.time() * 1000)}.json"
+        self._stderr_file = f"/tmp/jhtui-kernel-stderr-{int(time.time() * 1000)}.log"
+        # Redirect stderr to remote file so we can read it on failure.
         launcher = (
             prefix
             + f"python -m ipykernel_launcher -f {self._conn_file}"
+            + f" 2>{self._stderr_file}"
         )
         cmd = self._ssh._ssh_prefix(self._node) + [launcher]
         self._kernel_proc = subprocess.Popen(
@@ -78,6 +81,14 @@ class RemoteKernel:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+
+    def _read_remote_stderr(self) -> str:
+        cmd = self._ssh._ssh_prefix(self._node) + [f"cat {self._stderr_file}"]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            return result.stdout if result.returncode == 0 else ""
+        except Exception:
+            return ""
 
     def _read_connection_file(self, retries: int = 40) -> None:
         # Poll the remote connection file until it exists and is valid JSON.
@@ -96,7 +107,11 @@ class RemoteKernel:
                 except json.JSONDecodeError:
                     pass
             _time.sleep(0.5)
-        raise RuntimeError(f"connection file not ready after {retries} retries: {self._conn_file}")
+        err = self._read_remote_stderr()
+        raise RuntimeError(
+            f"connection file not ready after {retries} retries: {self._conn_file}"
+            + (f"\nremote stderr:\n{err}" if err else "\n(no remote stderr)")
+        )
 
     def _start_tunnels(self) -> None:
         # Forward each ZMQ port via a single SSH -L multiplexed connection.

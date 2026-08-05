@@ -171,6 +171,7 @@ class JupyterHubTUI(App):
         self._data = cfg.load()
         self._ssh = SSHManager(self._data)
         self._nb_counter = 0
+        self._notebook_views: list[NotebookView] = []
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -246,12 +247,11 @@ class JupyterHubTUI(App):
         return self.query_one("#term-display", TerminalDisplay)
 
     def on_unmount(self) -> None:
-        # Kill all notebook kernels and tunnels on exit.
-        try:
-            for pane in self.query(NotebookView):
-                pane.shutdown_kernel()
-        except Exception:
-            pass
+        for nb in self._notebook_views:
+            try:
+                nb.shutdown_kernel()
+            except Exception:
+                pass
 
     @property
     def _content(self) -> FocusableStatic:
@@ -613,6 +613,7 @@ class JupyterHubTUI(App):
             ssh=self._ssh,
             config=self._data,
         )
+        self._notebook_views.append(nb_view)
         pane = TabPane(basename, nb_view, id=tab_id)
         tabs.add_pane(pane)
         tabs.active = tab_id
