@@ -22,16 +22,11 @@
     }
   },
   "git": {
-    "repo_path": "/home/youruser/icetop-cnn"
+    "repo_path": "/home/youruser/repo"
   },
   "browse_path": "~",
-  "jupyter": {
-    "port": 8888
-  },
   "venv": {
-    "activate_cmd": "source ~/.bashrc && icetop-cnn",
-    "euporie_cmd": "~/.local/share/virtualenvs/icetop-cnn/bin/euporie",
-    "pythonpath": "/home/youruser/icetop-cnn",
-    "euporie_graphics": "none"
+    "activate_cmd": "source ~/.bashrc && my-venv",
+    "pythonpath": "/home/youruser/repo"
   }
 }

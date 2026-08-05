@@ -96,37 +96,6 @@ class SSHManager:
         # Return the raw SSH command for the embedded terminal to run.
         return self.raw_ssh_command(name)
 
-    def raw_ssh_command_for_notebook(self, name: str, notebook_path: str) -> list[str]:
-        node = self._nodes[name]
-        cp = self._control_path(name)
-        venv_cmd = cfg.venv_activate_cmd(self._data)
-        euporie = cfg.venv_euporie_cmd(self._data)
-        nb = shlex.quote(notebook_path)
-        repo = cfg.git_repo_path(self._data)
-        # Re-register kernel from venv so kernel spec points to venv Python.
-        kernel_fix = "python -m ipykernel install --user --name python3 --display-name Python3 >/dev/null 2>&1"
-        # Build euporie command with graphics and pythonpath.
-        graphics = cfg.venv_euporie_graphics(self._data)
-        euporie_cmd = f"{euporie} notebook {nb} --graphics {shlex.quote(graphics)}"
-        pythonpath = cfg.venv_pythonpath(self._data)
-        if pythonpath:
-            euporie_cmd = f"PYTHONPATH={shlex.quote(pythonpath)} {euporie_cmd}"
-        parts = [p for p in [venv_cmd, kernel_fix, euporie_cmd] if p]
-        remote_cmd = " && ".join(parts)
-        cmd = [
-            "ssh", "-tt",
-            "-o", f"ControlMaster=auto",
-            "-o", f"ControlPath={cp}",
-            "-o", "ControlPersist=120",
-            "-p", str(node.port),
-            f"{node.user}@{node.host}",
-        ]
-        if node.proxy and node.proxy in self._nodes:
-            proxy = self._nodes[node.proxy]
-            cmd += ["-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}"]
-        cmd += [remote_cmd]
-        return cmd
-
     def _control_path(self, name: str) -> str:
         return f"/tmp/jhtui-ssh-{name}"
 
@@ -372,7 +341,9 @@ def _self_check() -> None:
     assert "ControlPersist" in " ".join(raw), "ControlPersist missing from raw"
     assert hasattr(mgr, "scp_file"), "scp_file missing"
     assert hasattr(mgr, "scp_upload"), "scp_upload missing"
-    assert hasattr(mgr, "raw_ssh_command_for_notebook"), "notebook command missing"
+    assert hasattr(mgr, "read_remote_file"), "read_remote_file missing"
+    assert hasattr(mgr, "write_remote_file"), "write_remote_file missing"
+    assert not hasattr(mgr, "raw_ssh_command_for_notebook"), "old euporie notebook command should be deleted"
     assert not hasattr(mgr, "setup_keys"), "blocking setup_keys should be deleted"
     print("SSH self-check passed")
 

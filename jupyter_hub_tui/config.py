@@ -30,28 +30,12 @@ def nodes(data: dict[str, Any]) -> dict[str, dict]:
     return data.get("nodes", {})
 
 
-def venv_path(data: dict[str, Any]) -> str:
-    return data.get("venv", {}).get("path", "")
-
-
-def local_venv_path(data: dict[str, Any]) -> str:
-    return data.get("venv", {}).get("local_path", "")
-
-
 def venv_activate_cmd(data: dict[str, Any]) -> str:
     return data.get("venv", {}).get("activate_cmd", "")
 
 
-def venv_euporie_cmd(data: dict[str, Any]) -> str:
-    return data.get("venv", {}).get("euporie_cmd", "euporie")
-
-
 def venv_pythonpath(data: dict[str, Any]) -> str:
     return data.get("venv", {}).get("pythonpath", "")
-
-
-def venv_euporie_graphics(data: dict[str, Any]) -> str:
-    return data.get("venv", {}).get("euporie_graphics", "none")
 
 
 def git_repo_path(data: dict[str, Any]) -> str:
@@ -60,10 +44,6 @@ def git_repo_path(data: dict[str, Any]) -> str:
 
 def browse_path(data: dict[str, Any]) -> str:
     return data.get("browse_path", "~")
-
-
-def jupyter_settings(data: dict[str, Any]) -> dict[str, Any]:
-    return data.get("jupyter", {})
 
 
 def save(data: dict[str, Any]) -> None:
