@@ -76,10 +76,10 @@ class RemoteKernel:
         self._kernel_proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
         )
 
-    def _read_connection_file(self, retries: int = 20) -> None:
+    def _read_connection_file(self, retries: int = 40) -> None:
         # Poll the remote connection file until it exists and is valid JSON.
         import time as _time
         for _ in range(retries):
@@ -95,14 +95,6 @@ class RemoteKernel:
                     return
                 except json.JSONDecodeError:
                     pass
-            # Check if kernel died.
-            if self._kernel_proc.poll() is not None:
-                err = b""
-                try:
-                    err = self._kernel_proc.stderr.read(4096)
-                except Exception:
-                    pass
-                raise RuntimeError(f"remote kernel exited early. stderr={err.decode()}")
             _time.sleep(0.5)
         raise RuntimeError(f"connection file not ready after {retries} retries: {self._conn_file}")
 

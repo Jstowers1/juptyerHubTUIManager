@@ -245,6 +245,14 @@ class JupyterHubTUI(App):
     def _term(self) -> TerminalDisplay:
         return self.query_one("#term-display", TerminalDisplay)
 
+    def on_unmount(self) -> None:
+        # Kill all notebook kernels and tunnels on exit.
+        try:
+            for pane in self.query(NotebookView):
+                pane.shutdown_kernel()
+        except Exception:
+            pass
+
     @property
     def _content(self) -> FocusableStatic:
         return self.query_one("#content-area", FocusableStatic)
