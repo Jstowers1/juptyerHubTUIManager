@@ -51,7 +51,7 @@ def venv_pythonpath(data: dict[str, Any]) -> str:
 
 
 def venv_euporie_graphics(data: dict[str, Any]) -> str:
-    return data.get("venv", {}).get("euporie_graphics", "kitty")
+    return data.get("venv", {}).get("euporie_graphics", "none")
 
 
 def git_repo_path(data: dict[str, Any]) -> str:

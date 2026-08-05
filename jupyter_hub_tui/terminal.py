@@ -190,7 +190,7 @@ class TerminalDisplay(Widget):
             except OSError:
                 pass
             env = os.environ.copy()
-            env["TERM"] = "xterm-kitty"
+            env["TERM"] = "xterm-256color"
             os.execvpe(self._command[0], self._command, env)
         else:
             flags = fcntl.fcntl(self._master_fd, fcntl.F_GETFL)
