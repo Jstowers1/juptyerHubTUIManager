@@ -175,8 +175,8 @@ class NotebookView(Widget):
         Binding("ctrl+r", "run_and_next", "Run+Next", show=True, priority=True),
         Binding("ctrl+s", "save", "Save", show=False, priority=True),
         Binding("ctrl+i", "interrupt", "Interrupt", show=False, priority=True),
-        Binding("up", "prev_cell", "Prev", show=False, priority=True),
-        Binding("down", "next_cell", "Next", show=False, priority=True),
+        Binding("ctrl+k", "prev_cell", "Prev", show=False, priority=True),
+        Binding("ctrl+j", "next_cell", "Next", show=False, priority=True),
     ]
 
     class KernelStarted(Message):
@@ -311,6 +311,13 @@ class NotebookView(Widget):
             return
         code = card.get_source()
         card.cell.source = code
+        # Markdown cells are not executable. Skip and move on.
+        if card.cell.cell_type != "code":
+            status = self.query_one("#nb-status", Static)
+            status.update(f"[dim]Cell {card.index} is markdown (skipped)[/]")
+            if run_next:
+                self._focus_cell(self._active_cell + 1)
+            return
         card.set_running(True)
         status = self.query_one("#nb-status", Static)
         status.update(f"[yellow]Running cell {card.index}...[/]")

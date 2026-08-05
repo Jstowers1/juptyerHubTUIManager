@@ -68,14 +68,14 @@ class RemoteKernel:
 
     def _launch_remote_kernel(self) -> None:
         # SSH exec that starts ipykernel on remote. Blocks (kernel runs).
-        pp = f"PYTHONPATH={self._pythonpath}" if self._pythonpath else ""
-        parts = [p for p in [self._venv_cmd, pp] if p]
+        parts = [self._venv_cmd] if self._venv_cmd else []
         prefix = " && ".join(parts) + " && " if parts else ""
         self._conn_file = f"/tmp/jhtui-kernel-{int(time.time() * 1000)}.json"
         self._stderr_file = f"/tmp/jhtui-kernel-stderr-{int(time.time() * 1000)}.log"
-        # Redirect stderr to remote file so we can read it on failure.
+        env_prefix = f"PYTHONPATH={self._pythonpath} " if self._pythonpath else ""
         launcher = (
             prefix
+            + env_prefix
             + f"python -m ipykernel_launcher --ip=127.0.0.1 -f {self._conn_file}"
             + f" 2>{self._stderr_file}"
         )
