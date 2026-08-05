@@ -177,7 +177,7 @@ class TerminalDisplay(Widget):
             flags = fcntl.fcntl(self._master_fd, fcntl.F_GETFL)
             fcntl.fcntl(self._master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
             self._resize_pty()
-            self._poll_timer = self.set_interval(0.05, self._poll_pty)
+            self._poll_timer = self.set_interval(0.1, self._poll_pty)
 
     def send_input(self, data: str) -> None:
         if self._master_fd is not None and self._pty_running:
@@ -187,12 +187,20 @@ class TerminalDisplay(Widget):
                 pass
 
     def send_key(self, key: str, char: str | None) -> None:
+        import errno
         data = key_to_bytes(key, char)
-        if data and self._master_fd is not None and self._pty_running:
+        if not data or self._master_fd is None or not self._pty_running:
+            return
+        for _ in range(10):
             try:
                 os.write(self._master_fd, data)
-            except OSError:
-                pass
+                return
+            except OSError as e:
+                if e.errno == errno.EAGAIN:
+                    import time
+                    time.sleep(0.002)
+                    continue
+                return
 
     def _resize_pty(self) -> None:
         # Resize PTY and pyte screen to match widget size.

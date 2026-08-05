@@ -376,15 +376,18 @@ class JupyterHubTUI(App):
             return self._term
 
     def action_toggle_term_focus(self) -> None:
-        # Ctrl+T: toggle focus between active widget and sidebar.
         tabs = self.query_one("#term-tabs", TabbedContent)
         if tabs.active and tabs.active != "terminal-tab":
-            # Notebook or custom tab: focus the pane or the file tree.
+            # Notebook tab: toggle between notebook and file tree.
             if self.focused and self.focused.id != "file-tree":
                 self.query_one("#file-tree", Tree).focus()
             else:
                 pane = tabs.get_pane(tabs.active)
-                pane.focus()
+                try:
+                    nb = pane.query_one(NotebookView)
+                    nb.focus()
+                except Exception:
+                    pane.focus()
             return
         term = self._active_term()
         if self.focused is term:

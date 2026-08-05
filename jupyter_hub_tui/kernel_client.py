@@ -103,9 +103,15 @@ class RemoteKernel:
             return ""
 
     def _read_connection_file(self, retries: int = 40) -> None:
-        # Poll the remote connection file until it exists and is valid JSON.
         import time as _time
         for _ in range(retries):
+            # Fail fast if kernel process already died.
+            if self._kernel_proc and self._kernel_proc.poll() is not None:
+                err = self._read_remote_stderr()
+                raise RuntimeError(
+                    f"kernel process exited (code {self._kernel_proc.returncode})"
+                    + (f"\nremote stderr:\n{err}" if err else "")
+                )
             cmd = self._ssh._ssh_prefix(self._node) + [f"cat {self._conn_file}"]
             try:
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -151,13 +157,12 @@ class RemoteKernel:
         self._tunnel_proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
         )
         # Wait for tunnels to establish.
         time.sleep(1.0)
         if self._tunnel_proc.poll() is not None:
-            err = self._tunnel_proc.stderr.read(4096).decode()
-            raise RuntimeError(f"SSH tunnel failed: {err}")
+            raise RuntimeError("SSH tunnel process exited immediately")
 
     def _connect_client(self, timeout: int) -> None:
         kc = BlockingKernelClient()
