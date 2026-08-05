@@ -171,10 +171,12 @@ class NotebookView(Widget):
     """
 
     BINDINGS = [
-        Binding("ctrl+e", "run_cell", "Run Cell", show=True),
-        Binding("ctrl+r", "run_and_next", "Run+Next", show=True),
-        Binding("ctrl+s", "save", "Save", show=False),
-        Binding("ctrl+i", "interrupt", "Interrupt", show=False),
+        Binding("ctrl+e", "run_cell", "Run", show=True, priority=True),
+        Binding("ctrl+r", "run_and_next", "Run+Next", show=True, priority=True),
+        Binding("ctrl+s", "save", "Save", show=False, priority=True),
+        Binding("ctrl+i", "interrupt", "Interrupt", show=False, priority=True),
+        Binding("up", "prev_cell", "Prev", show=False, priority=True),
+        Binding("down", "next_cell", "Next", show=False, priority=True),
     ]
 
     class KernelStarted(Message):
@@ -262,7 +264,7 @@ class NotebookView(Widget):
         idx = max(0, min(idx, len(self._cells) - 1))
         self._active_cell = idx
         scroll = self.query_one("#nb-scroll", VerticalScroll)
-        cards = scroll.query(CellCard)
+        cards = list(scroll.query(CellCard))
         if idx < len(cards):
             try:
                 cards[idx].query_one(TextArea).focus()
@@ -271,11 +273,28 @@ class NotebookView(Widget):
                 pass
 
     def _current_card(self) -> CellCard | None:
+        # Find which CellCard owns the focused TextArea.
         scroll = self.query_one("#nb-scroll", VerticalScroll)
-        cards = scroll.query(CellCard)
+        cards = list(scroll.query(CellCard))
+        if not cards:
+            return None
+        focused = self.app.focused
+        for card in cards:
+            if focused is card or (
+                focused is not None and card in focused.ancestors
+            ):
+                self._active_cell = card.index
+                return card
+        # Fall back to tracked index.
         if self._active_cell < len(cards):
             return cards[self._active_cell]
-        return None
+        return cards[0]
+
+    def action_prev_cell(self) -> None:
+        self._focus_cell(self._active_cell - 1)
+
+    def action_next_cell(self) -> None:
+        self._focus_cell(self._active_cell + 1)
 
     def action_run_cell(self) -> None:
         self.run_worker(self._run_cell(run_next=False), exclusive=True)

@@ -61,6 +61,10 @@ class RemoteKernel:
         self._read_connection_file()
         self._start_tunnels()
         self._connect_client(timeout)
+        # Set matplotlib to Agg so plots go to PNG buffers.
+        self._kc.execute(
+            "import matplotlib;matplotlib.use('Agg')", silent=True, store_history=False
+        )
 
     def _launch_remote_kernel(self) -> None:
         # SSH exec that starts ipykernel on remote. Blocks (kernel runs).
@@ -72,7 +76,7 @@ class RemoteKernel:
         # Redirect stderr to remote file so we can read it on failure.
         launcher = (
             prefix
-            + f"python -m ipykernel_launcher -f {self._conn_file}"
+            + f"python -m ipykernel_launcher --ip=127.0.0.1 -f {self._conn_file}"
             + f" 2>{self._stderr_file}"
         )
         cmd = self._ssh._ssh_prefix(self._node) + [launcher]
@@ -166,15 +170,7 @@ class RemoteKernel:
         # Execute code, collect all output until idle.
         if self._kc is None:
             return CellResult(error="kernel not started")
-        # Use matplotlib Agg so figures go to PNG buffers.
-        full = (
-            "import matplotlib;"
-            "matplotlib.use('Agg');"
-            "import matplotlib.pyplot as plt;"
-            "from io import BytesIO;"
-            + code
-        )
-        msg_id = self._kc.execute(full, user_expressions={}, store_history=True)
+        msg_id = self._kc.execute(code, store_history=True)
         result = CellResult()
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
