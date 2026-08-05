@@ -67,47 +67,44 @@ class RemoteKernel:
         pp = f"PYTHONPATH={self._pythonpath}" if self._pythonpath else ""
         parts = [p for p in [self._venv_cmd, pp] if p]
         prefix = " && ".join(parts) + " && " if parts else ""
-        # Write connection file, print its path, then run kernel.
+        self._conn_file = f"/tmp/jhtui-kernel-{int(time.time() * 1000)}.json"
         launcher = (
             prefix
-            + "python -c '"
-            "from ipykernel.kernelapp import IPKernelApp;"
-            "import sys;"
-            "app=IPKernelApp.instance();"
-            "app.initialize([\"--ip=127.0.0.1\"]);"
-            "app.write_connection_file();"
-            "print(app.abs_connection_file,flush=True);"
-            "app.start()'"
+            + f"python -m ipykernel_launcher --ip=127.0.0.1 --f={self._conn_file}"
         )
         cmd = self._ssh._ssh_prefix(self._node) + [launcher]
         self._kernel_proc = subprocess.Popen(
             cmd,
-            stdout=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
         )
 
-    def _read_connection_file(self, retries: int = 15) -> None:
-        # The kernel prints the connection file path to stdout.
-        # We read one line, then cat the file via SSH.
-        stdout = self._kernel_proc.stdout
-        if stdout is None:
-            raise RuntimeError("kernel stdout is None")
-        line = stdout.readline()
-        if not line:
-            err = b""
+    def _read_connection_file(self, retries: int = 20) -> None:
+        # Poll the remote connection file until it exists and is valid JSON.
+        import time as _time
+        for _ in range(retries):
+            cmd = self._ssh._ssh_prefix(self._node) + [f"cat {self._conn_file}"]
             try:
-                err = self._kernel_proc.stderr.read(4096)
-            except Exception:
-                pass
-            raise RuntimeError(f"remote kernel produced no output. stderr={err.decode()}")
-        remote_conn = line.strip().decode()
-        time.sleep(0.5)
-        # Read connection file from remote.
-        cmd = self._ssh._ssh_prefix(self._node) + [f"cat {remote_conn}"]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-        if result.returncode != 0 or not result.stdout:
-            raise RuntimeError(f"cannot read connection file {remote_conn}")
-        self._conn_info = json.loads(result.stdout)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                _time.sleep(0.5)
+                continue
+            if result.returncode == 0 and result.stdout.strip():
+                try:
+                    self._conn_info = json.loads(result.stdout)
+                    return
+                except json.JSONDecodeError:
+                    pass
+            # Check if kernel died.
+            if self._kernel_proc.poll() is not None:
+                err = b""
+                try:
+                    err = self._kernel_proc.stderr.read(4096)
+                except Exception:
+                    pass
+                raise RuntimeError(f"remote kernel exited early. stderr={err.decode()}")
+            _time.sleep(0.5)
+        raise RuntimeError(f"connection file not ready after {retries} retries: {self._conn_file}")
 
     def _start_tunnels(self) -> None:
         # Forward each ZMQ port via a single SSH -L multiplexed connection.
