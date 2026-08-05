@@ -39,8 +39,11 @@ def local_venv_path(data: dict[str, Any]) -> str:
 
 
 def venv_activate_cmd(data: dict[str, Any]) -> str:
-    # Command sent to remote shell to toggle venv. User-defined.
     return data.get("venv", {}).get("activate_cmd", "")
+
+
+def venv_euporie_cmd(data: dict[str, Any]) -> str:
+    return data.get("venv", {}).get("euporie_cmd", "euporie")
 
 
 def git_repo_path(data: dict[str, Any]) -> str:

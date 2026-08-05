@@ -169,6 +169,7 @@ class JupyterHubTUI(App):
         super().__init__()
         self._data = cfg.load()
         self._ssh = SSHManager(self._data)
+        self._nb_counter = 0
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -223,7 +224,10 @@ class JupyterHubTUI(App):
         hp.write("    Enter      Checkout branch")
         hp.write("")
         hp.write("[cyan]Notebooks[/]")
-        hp.write("  Enter        Open .ipynb (new kitty window, remote euporie)")
+        hp.write("  Enter        Open .ipynb in new tab (remote euporie)")
+        hp.write("  Ctrl+W       Close notebook tab")
+        hp.write("  Ctrl+Left    Previous tab")
+        hp.write("  Ctrl+Right   Next tab")
         hp.write("")
         hp.write("[cyan]Euporie (command mode)[/]")
         hp.write("  Enter        Edit cell")
@@ -602,11 +606,17 @@ class JupyterHubTUI(App):
             return
         basename = notebook_path.rsplit("/", 1)[-1]
         ssh_cmd = self._ssh.raw_ssh_command_for_notebook(node_name, notebook_path)
-        if os.environ.get("KITTY_WINDOW_ID"):
-            subprocess.Popen(["kitty", "-e"] + ssh_cmd)
-            self.notify(f"Opened {basename} in new window")
-        else:
-            self.notify(f"Open manually:\n{' '.join(ssh_cmd)}")
+        self._nb_counter += 1
+        tab_id = f"nb-tab-{self._nb_counter}"
+        tabs = self.query_one("#term-tabs", TabbedContent)
+        term = TerminalDisplay()
+        term.notebook_mode = True
+        pane = TabPane(basename, term, id=tab_id)
+        tabs.add_pane(pane)
+        tabs.active = tab_id
+        term.start(ssh_cmd)
+        term.focus()
+        self.notify(f"Opening {basename}...")
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if hasattr(event.list_view, "id") and event.list_view.id == "node-list":

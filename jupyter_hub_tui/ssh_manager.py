@@ -100,7 +100,9 @@ class SSHManager:
         node = self._nodes[name]
         cp = self._control_path(name)
         venv_cmd = cfg.venv_activate_cmd(self._data)
-        remote_cmd = f"{venv_cmd} && euporie notebook {shlex.quote(notebook_path)}" if venv_cmd else f"euporie notebook {shlex.quote(notebook_path)}"
+        euporie = cfg.venv_euporie_cmd(self._data)
+        nb = shlex.quote(notebook_path)
+        remote_cmd = f"{venv_cmd} && {euporie} notebook {nb}" if venv_cmd else f"{euporie} notebook {nb}"
         cmd = [
             "ssh", "-tt",
             "-o", f"ControlMaster=auto",

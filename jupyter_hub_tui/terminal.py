@@ -85,6 +85,15 @@ ESCAPE_HATCH_KEYS = {
     "ctrl+backslash": "toggle_sidebar",
 }
 
+# Subset for notebook tabs. Everything else passes to euporie.
+NOTEBOOK_HATCH_KEYS = {
+    "ctrl+t": "toggle_term_focus",
+    "ctrl+w": "close_tab",
+    "ctrl+backslash": "toggle_sidebar",
+    "ctrl+left": "prev_tab",
+    "ctrl+right": "next_tab",
+}
+
 
 class TerminalDisplay(Widget):
 
@@ -108,8 +117,6 @@ class TerminalDisplay(Widget):
             self.terminal_display = terminal_display
             super().__init__()
 
-    _lines: reactive[list[str]] = reactive(list)
-
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._screen = pyte.Screen(80, 24)
@@ -122,6 +129,7 @@ class TerminalDisplay(Widget):
         self._pending_start = False
         self._connected = False
         self._overlay_done = False
+        self.notebook_mode = False
 
     @property
     def pty_active(self) -> bool:
@@ -129,7 +137,8 @@ class TerminalDisplay(Widget):
 
     def on_key(self, event) -> None:
         if self._pty_running and self._master_fd is not None:
-            action = ESCAPE_HATCH_KEYS.get(event.key)
+            hatches = NOTEBOOK_HATCH_KEYS if self.notebook_mode else ESCAPE_HATCH_KEYS
+            action = hatches.get(event.key)
             if action:
                 event.prevent_default()
                 event.stop()
@@ -227,11 +236,14 @@ class TerminalDisplay(Widget):
     def _poll_pty(self) -> None:
         if not self._pty_running or self._master_fd is None:
             return
-        try:
-            ready, _, _ = select.select([self._master_fd], [], [], 0)
-        except (OSError, ValueError):
-            return
-        if ready:
+        chunks = []
+        while True:
+            try:
+                ready, _, _ = select.select([self._master_fd], [], [], 0)
+            except (OSError, ValueError):
+                break
+            if not ready:
+                break
             try:
                 data = os.read(self._master_fd, 65536)
             except OSError:
@@ -240,11 +252,12 @@ class TerminalDisplay(Widget):
             if not data:
                 self._handle_exit()
                 return
+            chunks.append(data)
+        if chunks:
             self._connected = True
             if not self._overlay_done:
                 self._overlay_done = True
-                self._refresh_display()
-            self._stream.feed(data.decode("utf-8", errors="replace"))
+            self._stream.feed(b"".join(chunks).decode("utf-8", errors="replace"))
             self._refresh_display()
         if self._pid is not None:
             try:
@@ -276,30 +289,66 @@ class TerminalDisplay(Widget):
         self.post_message(self.Exited(status, self))
 
     def _refresh_display(self) -> None:
-        self._lines = [line.rstrip() for line in self._screen.display]
         self.refresh()
+
+    PYTE_TO_RICH = {
+        "default": "",
+        "brown": "yellow",
+    }
+
+    def _cell_style(self, cell, row: int, cursor_y: int) -> str:
+        if cell.reverse:
+            fg, bg = cell.bg, cell.fg
+        else:
+            fg, bg = cell.fg, cell.bg
+        fg = self.PYTE_TO_RICH.get(fg, fg)
+        bg = self.PYTE_TO_RICH.get(bg, bg)
+        parts = []
+        if fg and fg != "default":
+            parts.append(fg)
+        if bg and bg != "default":
+            parts.append(f"on {bg}")
+        if cell.bold:
+            parts.append("bold")
+        if cell.italics:
+            parts.append("italic")
+        if cell.underscore:
+            parts.append("underline")
+        if cell.strikethrough:
+            parts.append("strike")
+        if row == cursor_y and self._pty_running:
+            parts.append("reverse")
+        return " ".join(parts)
+
+    def _render_row(self, y: int, cursor_y: int) -> Text:
+        row_line = self._screen.buffer[y]
+        cursor_x = self._screen.cursor.x if y == cursor_y and self._pty_running else -1
+        parts = []
+        run_text = ""
+        run_style = None
+        for x in range(self._screen.columns):
+            cell = row_line[x]
+            style = self._cell_style(cell, y, cursor_y)
+            char = cell.data if cell.data else " "
+            if style != run_style:
+                if run_text:
+                    parts.append(Text(run_text, style=run_style or ""))
+                run_text = char
+                run_style = style
+            else:
+                run_text += char
+        if run_text:
+            parts.append(Text(run_text, style=run_style or ""))
+        if not parts:
+            return Text(" ")
+        return Text("").join(parts)
 
     def render(self) -> Text:
         if not self._overlay_done:
             return Text("Connecting...", style="yellow on #1d1f21")
-        if not self._lines:
-            return Text(" ", style="white on #1d1f21")
-        parts = []
-        cursor = self._screen.cursor
-        for row, line in enumerate(self._lines):
-            if not line:
-                line = " "
-            if row == cursor.y and self._pty_running:
-                col = min(cursor.x, len(line))
-                before = line[:col]
-                at = line[col] if col < len(line) else " "
-                after = line[col + 1:] if col + 1 <= len(line) else ""
-                parts.append(Text(before, style="white on #1d1f21"))
-                parts.append(Text(at, style="black on white"))
-                parts.append(Text(after + "\n", style="white on #1d1f21"))
-            else:
-                parts.append(Text(line + "\n", style="white on #1d1f21"))
-        return Text("").join(parts)
+        cursor_y = self._screen.cursor.y
+        rows = [self._render_row(y, cursor_y) for y in range(self._screen.lines)]
+        return Text("\n").join(rows)
 
     def stop(self) -> None:
         self._pty_running = False
@@ -326,7 +375,6 @@ class TerminalDisplay(Widget):
         h = max(1, self.size.height)
         self._screen = pyte.Screen(w, h)
         self._stream = pyte.Stream(self._screen)
-        self._lines = []
         self.refresh()
 
     def on_unmount(self) -> None:

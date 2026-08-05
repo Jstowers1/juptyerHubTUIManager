@@ -29,6 +29,7 @@
     "port": 8888
   },
   "venv": {
-    "activate_cmd": "source ~/.bashrc && icetop-cnn"
+    "activate_cmd": "source ~/.bashrc && icetop-cnn",
+    "euporie_cmd": "~/.local/share/virtualenvs/icetop-cnn/bin/euporie"
   }
 }
