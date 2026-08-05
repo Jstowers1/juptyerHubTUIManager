@@ -235,6 +235,23 @@ class TerminalDisplay(Widget):
             self._poll_timer.stop()
             self._poll_timer = None
 
+    def _passthrough_kitty_graphics(self, text: str) -> str:
+        if "\x1b_G" not in text:
+            return text
+        import re
+        import sys
+        apc_re = re.compile(r"\x1b_G.*?\x1b\\", re.DOTALL)
+        apc_seqs = apc_re.findall(text)
+        if apc_seqs:
+            stdout = sys.__stdout__
+            if stdout is not None:
+                try:
+                    stdout.write("".join(apc_seqs))
+                    stdout.flush()
+                except (OSError, ValueError):
+                    pass
+        return apc_re.sub("", text)
+
     def _poll_pty(self) -> None:
         if not self._pty_running or self._master_fd is None:
             return
@@ -259,7 +276,9 @@ class TerminalDisplay(Widget):
             self._connected = True
             if not self._overlay_done:
                 self._overlay_done = True
-            self._stream.feed(b"".join(chunks).decode("utf-8", errors="replace"))
+            text = b"".join(chunks).decode("utf-8", errors="replace")
+            text = self._passthrough_kitty_graphics(text)
+            self._stream.feed(text)
             self._refresh_display()
         if self._pid is not None:
             try:
