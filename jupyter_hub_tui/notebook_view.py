@@ -64,6 +64,10 @@ class CellCard(Widget):
         height: auto;
         min-height: 0;
         padding: 0 1;
+        display: none;
+    }
+    CellCard .cell-images.has-images {
+        display: block;
     }
     CellCard .cell-type-badge {
         dock: top;
@@ -85,9 +89,8 @@ class CellCard(Widget):
             f"[{self.index}] {self.cell.cell_type}",
             classes="cell-type-badge",
         )
-        editor = TextArea.code_editor(
+        editor = TextArea(
             text=self.cell.source,
-            language="python" if self.cell.cell_type == "code" else "markdown",
             classes="cell-editor",
         )
         yield editor
@@ -325,7 +328,6 @@ class NotebookView(Widget):
             return
         code = card.get_source()
         card.cell.source = code
-        # Markdown cells are not executable. Skip and move on.
         if card.cell.cell_type != "code":
             status = self.query_one("#nb-status", Static)
             status.update(f"[dim]Cell {card.index} is markdown (skipped)[/]")
@@ -340,8 +342,7 @@ class NotebookView(Widget):
             None, self._kernel.execute, code
         )
         card.set_result(result)
-        # Re-render images after setting result.
-        self._refresh_images()
+        await self._refresh_card_images(card)
         if result.error:
             status.update(f"[red]Cell {card.index} error[/]")
         else:
@@ -349,29 +350,28 @@ class NotebookView(Widget):
         if run_next:
             self._focus_cell(self._active_cell + 1)
 
-    def _refresh_images(self) -> None:
+    async def _refresh_card_images(self, card: CellCard) -> None:
+        images = card.get_images()
+        if not images:
+            return
         try:
             from textual_image.widget import TGPImage
             from PIL import Image
         except ImportError:
             return
-        scroll = self.query_one("#nb-scroll", VerticalScroll)
-        for card in scroll.query(CellCard):
-            images = card.get_images()
-            if not images:
-                continue
+        try:
+            container = card.query_one(".cell-images", VerticalScroll)
+        except Exception:
+            return
+        for child in list(container.children):
+            child.remove()
+        for img_bytes in images:
             try:
-                container = card.query_one(".cell-images", VerticalScroll)
+                img = Image.open(io.BytesIO(img_bytes))
+                await container.mount(TGPImage(img))
             except Exception:
-                continue
-            for child in list(container.children):
-                child.remove()
-            for img_bytes in images:
-                try:
-                    img = Image.open(io.BytesIO(img_bytes))
-                    container.mount(TGPImage(img))
-                except Exception:
-                    pass
+                pass
+        container.add_class("has-images")
 
     def action_save(self) -> None:
         self.run_worker(self._save_notebook, exclusive=True)

@@ -428,6 +428,21 @@ class JupyterHubTUI(App):
         self._term.resume_polling()
         self._term.focus()
 
+    def _focus_active_pane(self) -> None:
+        tabs = self.query_one("#term-tabs", TabbedContent)
+        if not tabs.active or tabs.active == "terminal-tab":
+            self._term.can_focus = True
+            self._term.focus()
+            return
+        pane = None
+        try:
+            pane = tabs.get_pane(tabs.active)
+            nb = pane.query_one(NotebookView)
+            nb._focus_cell(nb._active_cell)
+        except Exception:
+            if pane:
+                pane.focus()
+
     def action_prev_tab(self) -> None:
         tabs = self.query_one("#term-tabs", TabbedContent)
         if not tabs.display:
@@ -439,7 +454,7 @@ class JupyterHubTUI(App):
         new_id = ids[(i - 1) % len(ids)]
         tabs.active = new_id
         self._sync_term_polling(new_id)
-        self._active_term().focus()
+        self._focus_active_pane()
 
     def action_next_tab(self) -> None:
         tabs = self.query_one("#term-tabs", TabbedContent)
@@ -452,7 +467,7 @@ class JupyterHubTUI(App):
         new_id = ids[(i + 1) % len(ids)]
         tabs.active = new_id
         self._sync_term_polling(new_id)
-        self._active_term().focus()
+        self._focus_active_pane()
 
     def _sync_term_polling(self, active_tab_id: str | None) -> None:
         if active_tab_id == "terminal-tab":
