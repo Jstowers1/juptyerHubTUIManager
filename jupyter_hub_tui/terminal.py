@@ -89,16 +89,6 @@ ESCAPE_HATCH_KEYS = {
     "ctrl+backslash": "toggle_sidebar",
 }
 
-# Subset for notebook tabs. Everything else passes to euporie.
-NOTEBOOK_HATCH_KEYS = {
-    "ctrl+t": "toggle_term_focus",
-    "ctrl+w": "close_tab",
-    "ctrl+backslash": "toggle_sidebar",
-    "ctrl+left": "prev_tab",
-    "ctrl+right": "next_tab",
-}
-
-
 class TerminalDisplay(Widget):
 
     # Not focusable by default. Only when SSH starts.
@@ -133,7 +123,6 @@ class TerminalDisplay(Widget):
         self._pending_start = False
         self._connected = False
         self._overlay_done = False
-        self.notebook_mode = False
         self._apc = APCStream()
 
     @property
@@ -142,15 +131,12 @@ class TerminalDisplay(Widget):
 
     def on_key(self, event) -> None:
         if self._pty_running and self._master_fd is not None:
-            hatches = NOTEBOOK_HATCH_KEYS if self.notebook_mode else ESCAPE_HATCH_KEYS
-            action = hatches.get(event.key)
-            if action:
-                event.prevent_default()
+            hatches = ESCAPE_HATCH_KEYS
+            if event.key in hatches:
                 event.stop()
-                self.app.call_later(self.app.run_action, action)
+                self.app.call_later(self.app.run_action, hatches[event.key])
                 return
             self.send_key(event.key, event.character)
-            event.prevent_default()
             event.stop()
         elif self._pending_start:
             event.prevent_default()
