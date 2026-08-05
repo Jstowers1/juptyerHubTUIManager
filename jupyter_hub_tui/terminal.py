@@ -17,6 +17,8 @@ from textual.message import Message
 from textual.reactive import reactive
 from textual.widget import Widget
 
+from .apc import APCStream
+
 
 def key_to_bytes(key: str, char: str | None) -> bytes:
     special = {
@@ -132,6 +134,7 @@ class TerminalDisplay(Widget):
         self._connected = False
         self._overlay_done = False
         self.notebook_mode = False
+        self._apc = APCStream()
 
     @property
     def pty_active(self) -> bool:
@@ -187,7 +190,7 @@ class TerminalDisplay(Widget):
             except OSError:
                 pass
             env = os.environ.copy()
-            env["TERM"] = "xterm-256color"
+            env["TERM"] = "xterm-kitty"
             os.execvpe(self._command[0], self._command, env)
         else:
             flags = fcntl.fcntl(self._master_fd, fcntl.F_GETFL)
@@ -235,13 +238,21 @@ class TerminalDisplay(Widget):
             self._poll_timer.stop()
             self._poll_timer = None
 
-    def _strip_apc(self, text: str) -> str:
-        # Strip kitty APC sequences so base64 data does not leak into pyte.
-        if "\x1b_G" not in text:
-            return text
-        import re
-        apc_re = re.compile(r"\x1b_G.*?\x1b\\", re.DOTALL)
-        return apc_re.sub("", text)
+    def _process_apc(self, text: str) -> str:
+        # Parse APC sequences. Forward them to the real terminal.
+        # Return clean text for pyte.
+        clean, apcs = self._apc.feed(text)
+        if apcs:
+            import sys
+            stdout = sys.__stdout__
+            if stdout is not None:
+                try:
+                    for seq in apcs:
+                        stdout.write(seq)
+                    stdout.flush()
+                except (OSError, ValueError):
+                    pass
+        return clean
 
     def _poll_pty(self) -> None:
         if not self._pty_running or self._master_fd is None:
@@ -268,7 +279,7 @@ class TerminalDisplay(Widget):
             if not self._overlay_done:
                 self._overlay_done = True
             text = b"".join(chunks).decode("utf-8", errors="replace")
-            text = self._strip_apc(text)
+            text = self._process_apc(text)
             if text:
                 self._stream.feed(text)
             self._refresh_display()
