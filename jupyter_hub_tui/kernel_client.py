@@ -144,7 +144,7 @@ class RemoteKernel:
             self._conn_info["hb_port"],
         ]
         node = self._ssh.nodes[self._node]
-        cp = f"/tmp/jhtui-kernel-ssh-{self._node}"
+        cp = self._ssh._control_path(self._node)
         cmd = ["ssh",
             "-o", "ControlMaster=auto",
             "-o", f"ControlPath={cp}",
