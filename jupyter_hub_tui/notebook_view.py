@@ -202,6 +202,11 @@ class NotebookView(Widget):
         yield VerticalScroll(id="nb-scroll")
         yield Static("Loading notebook...", id="nb-status")
 
+    def on_focus(self) -> None:
+        # When NotebookView gets focus (e.g. via Ctrl+T), cascade into
+        # the active cell's TextArea.
+        self._focus_cell(self._active_cell)
+
     def on_mount(self) -> None:
         self.run_worker(self._load_and_start, exclusive=True)
 

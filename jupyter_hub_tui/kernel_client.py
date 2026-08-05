@@ -49,11 +49,10 @@ class RemoteKernel:
     def alive(self) -> bool:
         if self._kc is None:
             return False
-        try:
-            self._kc.kernel_info(timeout=2)
-            return True
-        except Exception:
+        # Check kernel process is still running, not a network heartbeat.
+        if self._kernel_proc and self._kernel_proc.poll() is not None:
             return False
+        return True
 
     def start(self, timeout: int = 30) -> None:
         # Start remote kernel, read connection file, set up tunnels.
@@ -87,15 +86,33 @@ class RemoteKernel:
             + f"python -m ipykernel_launcher --ip=127.0.0.1 -f {self._conn_file}"
             + f" 2>{self._stderr_file}"
         )
-        cmd = self._ssh._ssh_prefix(self._node) + [launcher]
+        cmd = self._ssh_cmd() + [launcher]
         self._kernel_proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
 
+    def _ssh_cmd(self) -> list[str]:
+        # Separate ControlPath so kernel traffic doesn't share the
+        # interactive terminal's SSH socket.
+        node = self._ssh.nodes[self._node]
+        cp = f"/tmp/jhtui-kernel-ssh-{self._node}"
+        cmd = ["ssh",
+            "-o", "ControlMaster=auto",
+            "-o", f"ControlPath={cp}",
+            "-o", "ControlPersist=120",
+            "-o", "ConnectTimeout=5",
+            "-o", "BatchMode=yes",
+        ]
+        if node.proxy and node.proxy in self._ssh.nodes:
+            proxy = self._ssh.nodes[node.proxy]
+            cmd += ["-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}"]
+        cmd += ["-p", str(node.port), f"{node.user}@{node.host}"]
+        return cmd
+
     def _read_remote_stderr(self) -> str:
-        cmd = self._ssh._ssh_prefix(self._node) + [f"cat {self._stderr_file}"]
+        cmd = self._ssh_cmd() + [f"cat {self._stderr_file}"]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
             return result.stdout if result.returncode == 0 else ""
@@ -112,7 +129,7 @@ class RemoteKernel:
                     f"kernel process exited (code {self._kernel_proc.returncode})"
                     + (f"\nremote stderr:\n{err}" if err else "")
                 )
-            cmd = self._ssh._ssh_prefix(self._node) + [f"cat {self._conn_file}"]
+            cmd = self._ssh_cmd() + [f"cat {self._conn_file}"]
             try:
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -141,12 +158,12 @@ class RemoteKernel:
             self._conn_info["hb_port"],
         ]
         node = self._ssh.nodes[self._node]
-        cp = self._ssh._control_path(self._node)
+        cp = f"/tmp/jhtui-kernel-ssh-{self._node}"
         cmd = ["ssh",
             "-o", "ControlMaster=auto",
             "-o", f"ControlPath={cp}",
             "-o", "ControlPersist=120",
-            "-N",  # no remote command
+            "-N",
         ]
         for p in ports:
             cmd += ["-L", f"{p}:127.0.0.1:{p}"]
@@ -199,15 +216,13 @@ class RemoteKernel:
             try:
                 msg = self._kc.get_iopub_msg(timeout=2)
             except _queue.Empty:
-                if self._kc.is_alive():
-                    continue
-                result.error = "kernel died"
-                break
-            except Exception:
-                if self._kc.is_alive():
-                    continue
-                result.error = "kernel died"
-                break
+                continue
+            except Exception as e:
+                # Real socket error, not just timeout.
+                if "transport" in str(e).lower() or "socket" in str(e).lower():
+                    result.error = f"kernel connection lost: {e}"
+                    break
+                continue
             if msg.get("parent_header", {}).get("msg_id") != msg_id:
                 continue
             mtype = msg["msg_type"]
@@ -237,6 +252,8 @@ class RemoteKernel:
                 result.error = "\n".join(tb) if tb else content.get("evalue", "unknown error")
             elif mtype == "status" and content.get("execution_state") == "idle":
                 break
+        else:
+            result.error = f"execution timed out after {timeout}s"
         return result
 
     def interrupt(self) -> None:
