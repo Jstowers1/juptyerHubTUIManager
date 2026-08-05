@@ -62,9 +62,17 @@ class RemoteKernel:
         self._start_tunnels()
         self._connect_client(timeout)
         # Set matplotlib to Agg so plots go to PNG buffers.
+        # Drain the response so it doesn't clog the next execute().
+        import queue as _queue
         self._kc.execute(
             "import matplotlib;matplotlib.use('Agg')", silent=True, store_history=False
         )
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                self._kc.get_iopub_msg(timeout=2)
+            except _queue.Empty:
+                break
 
     def _launch_remote_kernel(self) -> None:
         # SSH exec that starts ipykernel on remote. Blocks (kernel runs).
@@ -168,14 +176,28 @@ class RemoteKernel:
 
     def execute(self, code: str, timeout: int = 60) -> CellResult:
         # Execute code, collect all output until idle.
+        import queue as _queue
         if self._kc is None:
             return CellResult(error="kernel not started")
+        # Drain stale iopub messages from prior commands.
+        while True:
+            try:
+                self._kc.get_iopub_msg(timeout=0.1)
+            except _queue.Empty:
+                break
+            except Exception:
+                break
         msg_id = self._kc.execute(code, store_history=True)
         result = CellResult()
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
                 msg = self._kc.get_iopub_msg(timeout=2)
+            except _queue.Empty:
+                if self._kc.is_alive():
+                    continue
+                result.error = "kernel died"
+                break
             except Exception:
                 if self._kc.is_alive():
                     continue

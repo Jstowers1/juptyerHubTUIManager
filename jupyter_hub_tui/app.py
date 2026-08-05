@@ -143,22 +143,21 @@ class JupyterHubTUI(App):
             )
         return Content(title)
 
-    # Terminal.on_key intercepts escape hatches during SSH and calls
-    # actions directly. These bindings handle dashboard mode only.
+    # Terminal.on_key intercepts escape hatches during SSH.
+    # These bindings handle dashboard mode only.
+    # Ctrl+e/r/k/s/i handled by NotebookView when notebook is active.
     BINDINGS = [
-        Binding("ctrl+r", "refresh", "Refresh"),
         Binding("ctrl+m", "show_manual", "Manual"),
-        Binding("ctrl+k", "setup_keys", "SSH Keys"),
-        Binding("ctrl+e", "edit_node", "Edit Node"),
         Binding("ctrl+h", "show_help", "Help"),
         Binding("ctrl+g", "git_picker", "Git Repo"),
         Binding("ctrl+b", "git_branch", "Git Branch"),
         Binding("ctrl+backslash", "toggle_sidebar", "Sidebar", priority=True),
-        Binding("ctrl+t", "toggle_term_focus", "Focus"),
+        Binding("ctrl+t", "toggle_term_focus", "Focus", priority=True),
         Binding("ctrl+w", "close_tab", "Close Tab"),
         Binding("ctrl+o", "activate_venv", "Venv"),
-        Binding("ctrl+left", "prev_tab", "Prev Tab", show=False),
-        Binding("ctrl+right", "next_tab", "Next Tab", show=False),
+        Binding("ctrl+left", "prev_tab", "Prev Tab", show=False, priority=True),
+        Binding("ctrl+right", "next_tab", "Next Tab", show=False, priority=True),
+        Binding("ctrl+n", "disconnect", show=False),
         Binding("escape", "quit"),
         Binding("tab", "cycle_focus", show=False),
         Binding("1", "quick_connect(0)", show=False),
@@ -377,7 +376,16 @@ class JupyterHubTUI(App):
             return self._term
 
     def action_toggle_term_focus(self) -> None:
-        # Ctrl+T: toggle between active tab's terminal and sidebar.
+        # Ctrl+T: toggle focus between active widget and sidebar.
+        tabs = self.query_one("#term-tabs", TabbedContent)
+        if tabs.active and tabs.active != "terminal-tab":
+            # Notebook or custom tab: focus the pane or the file tree.
+            if self.focused and self.focused.id != "file-tree":
+                self.query_one("#file-tree", Tree).focus()
+            else:
+                pane = tabs.get_pane(tabs.active)
+                pane.focus()
+            return
         term = self._active_term()
         if self.focused is term:
             term.can_focus = False

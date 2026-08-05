@@ -72,10 +72,8 @@ def key_to_bytes(key: str, char: str | None) -> bytes:
 
 
 # Keys that escape the terminal during SSH.
-# Each maps to an app action name.
+# Ctrl+t/left/right/backslash are priority app bindings, not here.
 ESCAPE_HATCH_KEYS = {
-    "ctrl+t": "toggle_term_focus",
-    "ctrl+r": "refresh",
     "ctrl+m": "show_manual",
     "ctrl+k": "setup_keys",
     "ctrl+e": "edit_node",
@@ -84,9 +82,6 @@ ESCAPE_HATCH_KEYS = {
     "ctrl+b": "git_branch",
     "ctrl+w": "close_tab",
     "ctrl+o": "activate_venv",
-    "ctrl+left": "prev_tab",
-    "ctrl+right": "next_tab",
-    "ctrl+backslash": "toggle_sidebar",
 }
 
 class TerminalDisplay(Widget):

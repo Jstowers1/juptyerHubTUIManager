@@ -83,8 +83,8 @@ class CellCard(Widget):
         editor = TextArea.code_editor(
             text=self.cell.source,
             language="python" if self.cell.cell_type == "code" else "markdown",
+            classes="cell-editor",
         )
-        editor.can_focus = True
         yield editor
         output = Static("", classes="cell-output")
         yield output
@@ -228,7 +228,7 @@ class NotebookView(Widget):
             if c.cell_type not in ("code", "markdown"):
                 continue
             cs = CellState(
-                source=c.source,
+                source=c.source.rstrip(),
                 cell_type=c.cell_type,
                 outputs=getattr(c, "outputs", []),
             )
