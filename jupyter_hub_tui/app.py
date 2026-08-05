@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 from textual.app import App, ComposeResult
@@ -130,6 +132,16 @@ class JupyterHubTUI(App):
     SUB_TITLE = "NO CONNECTION"
     CSS = CSS
 
+    def format_title(self, title: str, sub_title: str):
+        from textual.content import Content
+        if sub_title:
+            return Content.assemble(
+                Content(title),
+                (" — ", "dim"),
+                Content.from_markup(sub_title),
+            )
+        return Content(title)
+
     # Terminal.on_key intercepts escape hatches during SSH and calls
     # actions directly. These bindings handle dashboard mode only.
     BINDINGS = [
@@ -157,7 +169,6 @@ class JupyterHubTUI(App):
         super().__init__()
         self._data = cfg.load()
         self._ssh = SSHManager(self._data)
-        self._nb_meta: dict[str, dict] = {}
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -183,7 +194,6 @@ class JupyterHubTUI(App):
         self._populate_file_tree()
         self._node_names = list(self._ssh.nodes.keys())
         self._populate_help()
-        self._nb_counter = 0
         # Hide tabs until SSH starts.
         self.query_one("#term-tabs").display = False
 
@@ -213,10 +223,7 @@ class JupyterHubTUI(App):
         hp.write("    Enter      Checkout branch")
         hp.write("")
         hp.write("[cyan]Notebooks[/]")
-        hp.write("  Enter        Open .ipynb in new tab (remote euporie)")
-        hp.write("  Ctrl+W       Close current notebook tab")
-        hp.write("  Ctrl+Left    Previous tab")
-        hp.write("  Ctrl+Right   Next tab")
+        hp.write("  Enter        Open .ipynb (new kitty window, remote euporie)")
         hp.write("")
         hp.write("[cyan]Euporie (command mode)[/]")
         hp.write("  Enter        Edit cell")
@@ -402,7 +409,6 @@ class JupyterHubTUI(App):
             return
         term = self._active_term()
         term.stop()
-        self._nb_meta.pop(active, None)
         tabs.remove_pane(active)
         tabs.active = "terminal-tab"
         self._term.focus()
@@ -594,33 +600,13 @@ class JupyterHubTUI(App):
         if not self._ssh.active:
             self.notify("No active SSH session.", severity="warning")
             return
-        self.notify(f"Downloading {notebook_path}...")
-        self.run_worker(
-            self._open_notebook_worker(node_name, notebook_path),
-            exclusive=True)
-
-    async def _open_notebook_worker(self, node_name: str, notebook_path: str) -> None:
-        cmd = self._ssh.raw_ssh_command_for_notebook(node_name, notebook_path)
-        self._nb_counter += 1
         basename = notebook_path.rsplit("/", 1)[-1]
-        self._add_notebook_tab(basename, notebook_path, cmd)
-
-    def _add_notebook_tab(self, title: str, remote_path: str, cmd: list[str]) -> None:
-        tab_id = f"nb-tab-{self._nb_counter}"
-        tabs = self.query_one("#term-tabs", TabbedContent)
-        term = TerminalDisplay()
-        term.notebook_mode = True
-        term._overlay_text = "Loading notebook..."
-        pane = TabPane(title, term, id=tab_id)
-        tabs.add_pane(pane)
-        self._nb_meta[tab_id] = {
-            "remote": remote_path,
-            "node": self._ssh.active.name if self._ssh.active else None,
-        }
-        tabs.active = tab_id
-        term.start(cmd)
-        term.focus()
-        self.notify(f"Opened {title}")
+        ssh_cmd = self._ssh.raw_ssh_command_for_notebook(node_name, notebook_path)
+        if os.environ.get("KITTY_WINDOW_ID"):
+            subprocess.Popen(["kitty", "-e"] + ssh_cmd)
+            self.notify(f"Opened {basename} in new window")
+        else:
+            self.notify(f"Open manually:\n{' '.join(ssh_cmd)}")
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if hasattr(event.list_view, "id") and event.list_view.id == "node-list":
@@ -977,12 +963,12 @@ class GitBranchScreen(ModalScreen):
         if not branch:
             return
         node = self._ssh.active.name
-        ok = self._ssh.remote_git_checkout(node, self._repo, branch)
+        ok, msg = self._ssh.remote_git_checkout(node, self._repo, branch)
         if ok:
             self.query_one("#git-output", Static).update(f"[green]Checked out {branch}[/]")
             self._refresh()
         else:
-            self.query_one("#git-output", Static).update(f"[red]Checkout failed: {branch}[/]")
+            self.query_one("#git-output", Static).update(f"[red]Checkout failed: {branch}[/]\n{msg}")
 
 
 def main() -> None:

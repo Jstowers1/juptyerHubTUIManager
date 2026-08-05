@@ -85,15 +85,6 @@ ESCAPE_HATCH_KEYS = {
     "ctrl+backslash": "toggle_sidebar",
 }
 
-# Subset for notebook tabs. Everything else passes to euporie.
-NOTEBOOK_HATCH_KEYS = {
-    "ctrl+t": "toggle_term_focus",
-    "ctrl+w": "close_tab",
-    "ctrl+backslash": "toggle_sidebar",
-    "ctrl+left": "prev_tab",
-    "ctrl+right": "next_tab",
-}
-
 
 class TerminalDisplay(Widget):
 
@@ -131,8 +122,6 @@ class TerminalDisplay(Widget):
         self._pending_start = False
         self._connected = False
         self._overlay_done = False
-        self.notebook_mode = False
-        self._overlay_text = "Connecting..."
 
     @property
     def pty_active(self) -> bool:
@@ -140,8 +129,7 @@ class TerminalDisplay(Widget):
 
     def on_key(self, event) -> None:
         if self._pty_running and self._master_fd is not None:
-            hatches = NOTEBOOK_HATCH_KEYS if self.notebook_mode else ESCAPE_HATCH_KEYS
-            action = hatches.get(event.key)
+            action = ESCAPE_HATCH_KEYS.get(event.key)
             if action:
                 event.prevent_default()
                 event.stop()
@@ -293,7 +281,7 @@ class TerminalDisplay(Widget):
 
     def render(self) -> Text:
         if not self._overlay_done:
-            return Text(self._overlay_text, style="yellow on #1d1f21")
+            return Text("Connecting...", style="yellow on #1d1f21")
         if not self._lines:
             return Text(" ", style="white on #1d1f21")
         parts = []

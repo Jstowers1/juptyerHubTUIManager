@@ -233,15 +233,15 @@ class SSHManager:
             return []
         return [b.strip().strip("'") for b in result.stdout.strip().splitlines() if b.strip()]
 
-    def remote_git_checkout(self, name: str, path: str, branch: str) -> bool:
+    def remote_git_checkout(self, name: str, path: str, branch: str) -> tuple[bool, str]:
         cmd = self._ssh_prefix(name) + [
             f"git -C {shlex.quote(path)} checkout {shlex.quote(branch)} 2>&1",
         ]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         except (subprocess.TimeoutExpired, FileNotFoundError):
-            return False
-        return result.returncode == 0
+            return False, "timeout"
+        return result.returncode == 0, result.stdout.strip()
 
     def scp_file(self, name: str, remote_path: str, local_path: str) -> bool:
         node = self._nodes[name]
