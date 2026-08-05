@@ -378,14 +378,13 @@ class JupyterHubTUI(App):
     def action_toggle_term_focus(self) -> None:
         tabs = self.query_one("#term-tabs", TabbedContent)
         if tabs.active and tabs.active != "terminal-tab":
-            # Notebook tab: toggle between notebook and file tree.
             if self.focused and self.focused.id != "file-tree":
                 self.query_one("#file-tree", Tree).focus()
             else:
                 pane = tabs.get_pane(tabs.active)
                 try:
                     nb = pane.query_one(NotebookView)
-                    nb.focus()
+                    nb._focus_cell(nb._active_cell)
                 except Exception:
                     pane.focus()
             return
