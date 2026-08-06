@@ -118,6 +118,22 @@ class SSHManager:
         ]
         return cmd
 
+    def wait_for_master(self, name: str, timeout: int = 15) -> bool:
+        # Block until the interactive master socket is usable.
+        import time as _time
+        cp = self._control_path(name)
+        check = self._ssh_prefix(name) + ["true"]
+        deadline = _time.monotonic() + timeout
+        while _time.monotonic() < deadline:
+            try:
+                r = subprocess.run(check, capture_output=True, timeout=5)
+                if r.returncode == 0:
+                    return True
+            except subprocess.TimeoutExpired:
+                pass
+            _time.sleep(0.3)
+        return False
+
     def check_ssh_ready(self, name: str) -> bool:
         cmd = self._ssh_prefix(name) + ["echo ok"]
         try:

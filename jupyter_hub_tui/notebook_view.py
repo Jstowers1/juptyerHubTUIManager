@@ -280,8 +280,14 @@ class NotebookView(Widget):
 
         status = self.query_one("#nb-status", RichLog)
         status.write("[yellow]Loading notebook...[/]")
-        # Load notebook from remote.
+        # Wait for master socket before any non-interactive SSH.
         loop = asyncio.get_event_loop()
+        ready = await loop.run_in_executor(
+            None, self._ssh.wait_for_master, self.node_name
+        )
+        if not ready:
+            status.write("[red]SSH master socket not ready. Is the terminal connected?[/]")
+            return
         raw = await loop.run_in_executor(
             None,
             self._ssh.read_remote_file,

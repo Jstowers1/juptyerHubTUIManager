@@ -56,6 +56,7 @@ class RemoteKernel:
 
     def start(self, timeout: int = 30) -> None:
         # Start remote kernel, read connection file, set up tunnels.
+        self._ssh.wait_for_master(self._node)
         self._launch_remote_kernel()
         self._read_connection_file()
         self._start_tunnels()
@@ -76,7 +77,8 @@ class RemoteKernel:
     def _launch_remote_kernel(self) -> None:
         # SSH exec that starts ipykernel on remote. Blocks (kernel runs).
         parts = [self._venv_cmd] if self._venv_cmd else []
-        prefix = " && ".join(parts) + " && " if parts else ""
+        # PS1 bypasses .bashrc non-interactive guard so conda functions load.
+        prefix = ("PS1='$ ' " + " && ".join(parts) + " && ") if parts else ""
         self._conn_file = f"/tmp/jhtui-kernel-{int(time.time() * 1000)}.json"
         self._stderr_file = f"/tmp/jhtui-kernel-stderr-{int(time.time() * 1000)}.log"
         env_prefix = f"PYTHONPATH={self._pythonpath} " if self._pythonpath else ""
