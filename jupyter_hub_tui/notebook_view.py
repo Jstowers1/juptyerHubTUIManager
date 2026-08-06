@@ -14,7 +14,7 @@ from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.message import Message
 from textual.widget import Widget
-from textual.widgets import Static, TextArea
+from textual.widgets import RichLog, Static, TextArea
 
 from .kernel_client import CellResult, RemoteKernel
 
@@ -227,10 +227,11 @@ class NotebookView(Widget):
     }
     #nb-status {
         dock: bottom;
-        height: 1;
+        height: 5;
         background: $panel;
         color: $text-muted;
         padding: 0 1;
+        border-top: solid $primary;
     }
     """
 
@@ -264,7 +265,7 @@ class NotebookView(Widget):
 
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="nb-scroll")
-        yield Static("Loading notebook...", id="nb-status")
+        yield RichLog(id="nb-status", markup=True)
 
     def on_focus(self) -> None:
         # When NotebookView gets focus (e.g. via Ctrl+T), cascade into
@@ -277,8 +278,8 @@ class NotebookView(Widget):
     async def _load_and_start(self) -> None:
         from . import config as cfg
 
-        status = self.query_one("#nb-status", Static)
-        status.update("[yellow]Loading notebook...[/]")
+        status = self.query_one("#nb-status", RichLog)
+        status.write("[yellow]Loading notebook...[/]")
         # Load notebook from remote.
         loop = asyncio.get_event_loop()
         raw = await loop.run_in_executor(
@@ -289,7 +290,7 @@ class NotebookView(Widget):
         )
         if raw is None:
             err = self._ssh._last_error or "unknown"
-            status.update(f"[red]Failed to load notebook: {err}[/]")
+            status.write(f"[red]Failed to load notebook: {err}[/]")
             return
         nb = nbformat.reads(raw.decode(), as_version=4)
         self._cells = []
@@ -302,7 +303,7 @@ class NotebookView(Widget):
                 outputs=getattr(c, "outputs", []),
             )
             self._cells.append(cs)
-        status.update(f"[yellow]Starting kernel...[/]")
+        status.write(f"[yellow]Starting kernel...[/]")
         # Start remote kernel.
         venv_cmd = cfg.venv_activate_cmd(self._config)
         pythonpath = cfg.venv_pythonpath(self._config)
@@ -312,9 +313,10 @@ class NotebookView(Widget):
         try:
             await loop.run_in_executor(None, self._kernel.start)
         except Exception as e:
-            status.update(f"[red]Kernel failed: {e}[/]")
+            status.write(f"[red]Kernel failed:[/]")
+            status.write(str(e))
             return
-        status.update(f"[green]Kernel ready[/]  {len(self._cells)} cells")
+        status.write(f"[green]Kernel ready[/]  {len(self._cells)} cells")
         await self._render_cells()
         self.post_message(self.KernelStarted())
 
@@ -373,14 +375,14 @@ class NotebookView(Widget):
         code = card.get_source()
         card.cell.source = code
         if card.cell.cell_type != "code":
-            status = self.query_one("#nb-status", Static)
-            status.update(f"[dim]Cell {card.index} is markdown (skipped)[/]")
+            status = self.query_one("#nb-status", RichLog)
+            status.write(f"[dim]Cell {card.index} is markdown (skipped)[/]")
             if run_next:
                 self._focus_cell(self._active_cell + 1)
             return
         card.set_running(True)
-        status = self.query_one("#nb-status", Static)
-        status.update(f"[yellow]Running cell {card.index}...[/]")
+        status = self.query_one("#nb-status", RichLog)
+        status.write(f"[yellow]Running cell {card.index}...[/]")
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             None, self._kernel.execute, code
@@ -388,9 +390,9 @@ class NotebookView(Widget):
         card.set_result(result)
         await self._refresh_card_images(card)
         if result.error:
-            status.update(f"[red]Cell {card.index} error[/]")
+            status.write(f"[red]Cell {card.index} error[/]")
         else:
-            status.update(f"[green]Cell {card.index} done[/]  {len(result.images)} image(s)")
+            status.write(f"[green]Cell {card.index} done[/]  {len(result.images)} image(s)")
         if run_next:
             self._focus_cell(self._active_cell + 1)
 
