@@ -721,6 +721,9 @@ class TerminalDisplay(Widget):
         self._connected = False
         self._overlay_done = False
         self._apc = APCStream()
+        # Row render cache. Only dirty rows get rebuilt.
+        self._row_cache: list[Text] = [Text(" " * 80) for _ in range(24)]
+        self._render_cache: Optional[Text] = None
 
     @property
     def pty_active(self) -> bool:
@@ -809,6 +812,8 @@ class TerminalDisplay(Widget):
         except OSError:
             pass
         self._screen.resize(h, w)
+        self._row_cache = [self._screen.render_row(y) for y in range(self._screen.rows)]
+        self._render_cache = None
         self.refresh()
 
     def on_resize(self, event) -> None:
@@ -874,6 +879,10 @@ class TerminalDisplay(Widget):
             if text:
                 self._screen.feed(text)
             if self._screen.dirty:
+                for y in self._screen.dirty:
+                    if y < len(self._row_cache):
+                        self._row_cache[y] = self._screen.render_row(y)
+                self._render_cache = None
                 self._screen.dirty.clear()
                 self.refresh()
         if self._pid is not None:
@@ -908,9 +917,9 @@ class TerminalDisplay(Widget):
     def render(self) -> Text:
         if not self._overlay_done:
             return Text("Connecting...", style="yellow on #1d1f21")
-        cursor_y = self._screen.cy
-        rows = [self._screen.render_row(y) for y in range(self._screen.rows)]
-        return Text("\n").join(rows)
+        if self._render_cache is None:
+            self._render_cache = Text("\n").join(self._row_cache)
+        return self._render_cache
 
     def stop(self) -> None:
         self._pty_running = False
@@ -936,6 +945,8 @@ class TerminalDisplay(Widget):
         w = max(1, self.size.width)
         h = max(1, self.size.height)
         self._screen = Screen(w, h)
+        self._row_cache = [self._screen.render_row(y) for y in range(self._screen.rows)]
+        self._render_cache = None
         self.refresh()
 
     def on_unmount(self) -> None:
