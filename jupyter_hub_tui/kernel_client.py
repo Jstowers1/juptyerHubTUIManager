@@ -94,8 +94,18 @@ class RemoteKernel:
         )
 
     def _ssh_cmd(self) -> list[str]:
-        # Reuse the interactive terminal's ControlMaster socket.
-        return self._ssh._ssh_prefix(self._node)
+        node = self._ssh.nodes[self._node]
+        cp = self._ssh._control_path(self._node)
+        cmd = ["ssh", "-T",
+            "-o", "ControlMaster=auto",
+            "-o", f"ControlPath={cp}",
+            "-o", "ControlPersist=120",
+        ]
+        if node.proxy and node.proxy in self._ssh.nodes:
+            proxy = self._ssh.nodes[node.proxy]
+            cmd += ["-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}"]
+        cmd += ["-p", str(node.port), f"{node.user}@{node.host}"]
+        return cmd
 
     def _read_remote_stderr(self) -> str:
         cmd = self._ssh_cmd() + [f"cat {self._stderr_file}"]
@@ -106,28 +116,31 @@ class RemoteKernel:
             return ""
 
     def _read_connection_file(self, retries: int = 40) -> None:
-        import time as _time
-        for _ in range(retries):
-            # Fail fast if kernel process already died.
-            if self._kernel_proc and self._kernel_proc.poll() is not None:
-                err = self._read_remote_stderr()
-                raise RuntimeError(
-                    f"kernel process exited (code {self._kernel_proc.returncode})"
-                    + (f"\nremote stderr:\n{err}" if err else "")
-                )
-            cmd = self._ssh_cmd() + [f"cat {self._conn_file}"]
+        # Single SSH command that polls on the remote side.
+        # Avoids flooding the ControlMaster socket with 40 separate SSH connections.
+        waiter = (
+            f"for i in $(seq 1 {retries}); do"
+            f"  if [ -f {self._conn_file} ]; then cat {self._conn_file}; exit 0; fi"
+            f"  sleep 0.5"
+            f"done; exit 1"
+        )
+        cmd = self._ssh_cmd() + [waiter]
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=retries * 0.5 + 10
+            )
+        except subprocess.TimeoutExpired:
+            err = self._read_remote_stderr()
+            raise RuntimeError(
+                f"connection file wait timed out: {self._conn_file}"
+                + (f"\nremote stderr:\n{err}" if err else "")
+            )
+        if result.returncode == 0 and result.stdout.strip():
             try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            except (subprocess.TimeoutExpired, FileNotFoundError):
-                _time.sleep(0.5)
-                continue
-            if result.returncode == 0 and result.stdout.strip():
-                try:
-                    self._conn_info = json.loads(result.stdout)
-                    return
-                except json.JSONDecodeError:
-                    pass
-            _time.sleep(0.5)
+                self._conn_info = json.loads(result.stdout)
+                return
+            except json.JSONDecodeError:
+                pass
         err = self._read_remote_stderr()
         raise RuntimeError(
             f"connection file not ready after {retries} retries: {self._conn_file}"
