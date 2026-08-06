@@ -315,15 +315,15 @@ class NotebookView(Widget):
             status.update(f"[red]Kernel failed: {e}[/]")
             return
         status.update(f"[green]Kernel ready[/]  {len(self._cells)} cells")
-        self._render_cells()
+        await self._render_cells()
         self.post_message(self.KernelStarted())
 
-    def _render_cells(self) -> None:
+    async def _render_cells(self) -> None:
         scroll = self.query_one("#nb-scroll", VerticalScroll)
         scroll.remove_children()
         for i, cell in enumerate(self._cells):
             card = CellCard(cell, i)
-            scroll.mount(card)
+            await scroll.mount(card)
         if self._cells:
             self._focus_cell(0)
 

@@ -114,11 +114,10 @@ class RemoteKernel:
                 + (f"\nremote stderr:\n{err}" if err else "\n(no remote stderr)")
             )
         # Single SSH command that polls on the remote side.
-        # Avoids 40 separate SSH connections flooding the ControlMaster socket.
         waiter = (
-            f"for i in $(seq 1 {retries}); do"
-            f"  if [ -f {self._conn_file} ]; then cat {self._conn_file}; exit 0; fi"
-            f"  sleep 0.5"
+            f"for i in $(seq 1 {retries}); do "
+            f"if [ -f {self._conn_file} ]; then cat {self._conn_file}; exit 0; fi; "
+            f"sleep 0.5; "
             f"done; exit 1"
         )
         cmd = self._ssh_cmd() + [waiter]
