@@ -9,8 +9,6 @@ import select
 import struct
 import fcntl
 import termios
-import errno
-import time
 from typing import Optional
 
 from rich.text import Text
@@ -791,15 +789,12 @@ class TerminalDisplay(Widget):
         data = key_to_bytes(key, char)
         if not data or self._master_fd is None or not self._pty_running:
             return
-        for _ in range(10):
-            try:
-                os.write(self._master_fd, data)
-                return
-            except OSError as e:
-                if e.errno == errno.EAGAIN:
-                    time.sleep(0.002)
-                    continue
-                return
+        # Try once. EAGAIN = buffer full, key is lost.
+        # Never block the event loop waiting for buffer space.
+        try:
+            os.write(self._master_fd, data)
+        except OSError:
+            pass
 
     def _resize_pty(self) -> None:
         if self._master_fd is None:
@@ -854,7 +849,8 @@ class TerminalDisplay(Widget):
         if not self._pty_running or self._master_fd is None:
             return
         chunks = []
-        while True:
+        # Cap iterations per poll so one burst never starves the event loop.
+        for _ in range(3):
             try:
                 ready, _, _ = select.select([self._master_fd], [], [], 0)
             except (OSError, ValueError):

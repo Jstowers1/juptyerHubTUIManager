@@ -307,13 +307,29 @@ class SSHManager:
         # Write a remote file via SSH stdin redirect.
         qpath = self._quote_remote_path(path)
         cmd = self._ssh_prefix(name) + [f"cat > {qpath}"]
-        try:
-            result = subprocess.run(
-                cmd, input=data, capture_output=True, timeout=15
-            )
-        except (subprocess.TimeoutExpired, FileNotFoundError):
+        for attempt in range(3):
+            try:
+                result = subprocess.run(
+                    cmd, input=data, capture_output=True, timeout=20
+                )
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                # MaxSessions limit: wait for a slot then retry.
+                if attempt < 2:
+                    import time as _t
+                    _t.sleep(1)
+                    continue
+                return False
+            if result.returncode == 0:
+                return True
+            err = result.stderr.decode(errors="replace")
+            # MaxSessions or multiplexing error: retry.
+            if "mux" in err.lower() or "session" in err.lower():
+                if attempt < 2:
+                    import time as _t
+                    _t.sleep(1)
+                    continue
             return False
-        return result.returncode == 0
+        return False
 
     def setup_keys_command(self) -> list[str]:
         # Return a shell command that generates a key and copies it to all nodes.

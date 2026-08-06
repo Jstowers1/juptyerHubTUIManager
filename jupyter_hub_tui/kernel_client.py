@@ -186,7 +186,7 @@ class RemoteKernel:
             ) from e
         self._kc = kc
 
-    def execute(self, code: str, timeout: int = 60) -> CellResult:
+    def execute(self, code: str, timeout: int = 120) -> CellResult:
         # Execute code, collect all output until idle.
         import queue as _queue
         if self._kc is None:
