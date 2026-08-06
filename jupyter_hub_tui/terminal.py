@@ -730,6 +730,11 @@ class TerminalDisplay(Widget):
         self._reader_thread: Optional[threading.Thread] = None
         self._reader_stop = threading.Event()
         self._grid_lock = threading.Lock()
+        # Key writer thread. on_key enqueues bytes, writer thread
+        # does os.write with retries. Event loop never blocks on PTY I/O.
+        self._key_queue: _queue.Queue = _queue.Queue()
+        self._writer_thread: Optional[threading.Thread] = None
+        self._writer_stop = threading.Event()
 
     @property
     def pty_active(self) -> bool:
@@ -791,6 +796,12 @@ class TerminalDisplay(Widget):
             )
             self._reader_thread.start()
             self._poll_timer = self.set_interval(0.016, self._drain_queue)
+            # Start writer thread for non-blocking key writes.
+            self._writer_stop.clear()
+            self._writer_thread = threading.Thread(
+                target=self._writer_loop, daemon=True
+            )
+            self._writer_thread.start()
 
     def _reader_loop(self) -> None:
         # Background thread: reads PTY, parses ANSI, renders rows.
@@ -850,23 +861,35 @@ class TerminalDisplay(Widget):
                 pass
 
     def send_key(self, key: str, char: str | None) -> None:
-        # MUST only os.write and return. No refresh() here.
+        # MUST only enqueue and return. Never block the event loop.
+        # The writer thread does os.write with EAGAIN retries.
         data = key_to_bytes(key, char)
         if not data or self._master_fd is None or not self._pty_running:
             return
+        self._key_queue.put(data)
+
+    def _writer_loop(self) -> None:
+        # Background thread: drains key queue, writes to PTY with retries.
+        # Blocks on select.select here, never on the event loop.
         fd = self._master_fd
-        for _ in range(5):
+        if fd is None:
+            return
+        while not self._writer_stop.is_set():
             try:
-                os.write(fd, data)
-                return
-            except OSError as e:
-                if e.errno != errno.EAGAIN:
-                    return
-                # Buffer full. Wait for write-readiness, not a zero-delay spin.
+                data = self._key_queue.get(timeout=0.1)
+            except _queue.Empty:
+                continue
+            for _ in range(5):
                 try:
-                    select.select([], [fd], [], 0.01)
-                except (OSError, ValueError):
-                    return
+                    os.write(fd, data)
+                    break
+                except OSError as e:
+                    if e.errno != errno.EAGAIN:
+                        break
+                    try:
+                        select.select([], [fd], [], 0.01)
+                    except (OSError, ValueError):
+                        break
 
     def _drain_queue(self) -> None:
         if not self._pty_running:
@@ -952,6 +975,7 @@ class TerminalDisplay(Widget):
         self.can_focus = False
         self.pause_polling()
         self._reader_stop.set()
+        self._writer_stop.set()
         if self._pid is not None:
             try:
                 os.waitpid(self._pid, 0)
