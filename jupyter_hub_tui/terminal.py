@@ -722,6 +722,7 @@ class TerminalDisplay(Widget):
         # Row render cache. Only dirty rows get rebuilt.
         self._row_cache: list[Text] = [Text(" " * 80) for _ in range(24)]
         self._cached_render: Optional[Text] = None
+        self._pending_text: str = ""
 
     @property
     def pty_active(self) -> bool:
@@ -849,6 +850,10 @@ class TerminalDisplay(Widget):
         if not self._pty_running or self._master_fd is None:
             return
         chunks = []
+        # Drain pending text from prior burst first.
+        if self._pending_text:
+            chunk, self._pending_text = self._pending_text[:4096], self._pending_text[4096:]
+            chunks.append(chunk.encode("utf-8", errors="replace"))
         # Cap iterations per poll so one burst never starves the event loop.
         for _ in range(3):
             try:
@@ -873,6 +878,11 @@ class TerminalDisplay(Widget):
             text = b"".join(chunks).decode("utf-8", errors="replace")
             text = self._process_apc(text)
             if text:
+                # Cap feed size so parser never blocks event loop too long.
+                # ~4KB of text parses in ~1ms. Extra stays for next tick.
+                if len(text) > 4096:
+                    self._pending_text = text[4096:] + self._pending_text
+                    text = text[:4096]
                 self._screen.feed(text)
             if self._screen.dirty:
                 for y in self._screen.dirty:

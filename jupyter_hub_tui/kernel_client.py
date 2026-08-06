@@ -191,14 +191,8 @@ class RemoteKernel:
         import queue as _queue
         if self._kc is None:
             return CellResult(error="kernel not started")
-        # Drain stale iopub messages from prior commands.
-        while True:
-            try:
-                self._kc.get_iopub_msg(timeout=0.1)
-            except _queue.Empty:
-                break
-            except Exception:
-                break
+        # Drain stale iopub messages quickly.
+        self._kc.iopub_channel.flush()
         msg_id = self._kc.execute(code, store_history=True)
         result = CellResult()
         deadline = time.monotonic() + timeout
@@ -206,9 +200,15 @@ class RemoteKernel:
             try:
                 msg = self._kc.get_iopub_msg(timeout=2)
             except _queue.Empty:
+                # Check shell channel for idle reply.
+                try:
+                    reply = self._kc.get_shell_msg(timeout=0.1)
+                    if reply.get("parent_header", {}).get("msg_id") == msg_id:
+                        break
+                except _queue.Empty:
+                    pass
                 continue
             except Exception as e:
-                # Real socket error, not just timeout.
                 if "transport" in str(e).lower() or "socket" in str(e).lower():
                     result.error = f"kernel connection lost: {e}"
                     break
