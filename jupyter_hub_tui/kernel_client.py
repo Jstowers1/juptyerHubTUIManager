@@ -93,10 +93,12 @@ class RemoteKernel:
         logging.basicConfig(filename="/tmp/jhtui-debug.log", level=logging.DEBUG)
         logging.debug("kernel launch cmd: %s", cmd)
         logging.debug("launcher: %s", launcher)
+        # DEVNULL: conda activation output fills 64KB PIPE buffer and
+        # deadlocks the kernel. Remote stderr already captured in log file.
         self._kernel_proc = subprocess.Popen(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
 
     def _ssh_cmd(self) -> list[str]:
@@ -115,18 +117,8 @@ class RemoteKernel:
         # Fail fast if kernel already died.
         if self._kernel_proc and self._kernel_proc.poll() is not None:
             err = self._read_remote_stderr()
-            # Also read SSH stderr/stdout for the real error.
-            ssh_out = self._kernel_proc.stdout.read(4096).decode(errors="replace") if self._kernel_proc.stdout else ""
-            ssh_err = self._kernel_proc.stderr.read(4096).decode(errors="replace") if self._kernel_proc.stderr else ""
-            import logging
-            logging.debug("kernel proc exited code=%s", self._kernel_proc.returncode)
-            logging.debug("kernel stdout: %s", ssh_out)
-            logging.debug("kernel stderr: %s", ssh_err)
-            logging.debug("remote stderr: %s", err)
             raise RuntimeError(
                 f"kernel exited (code {self._kernel_proc.returncode})"
-                f"\nssh out: {ssh_out}"
-                f"\nssh err: {ssh_err}"
                 f"\nremote stderr: {err}"
             )
         # Single SSH command that polls on the remote side.
@@ -153,25 +145,16 @@ class RemoteKernel:
                 return
             except json.JSONDecodeError:
                 pass
-        # Poll exhausted without getting the file. Capture all diagnostics.
+        # Poll exhausted without getting the file.
         err = self._read_remote_stderr()
-        kproc_out = ""
-        kproc_err = ""
-        if self._kernel_proc and self._kernel_proc.poll() is not None:
-            kproc_out = self._kernel_proc.stdout.read(4096).decode(errors="replace") if self._kernel_proc.stdout else ""
-            kproc_err = self._kernel_proc.stderr.read(4096).decode(errors="replace") if self._kernel_proc.stderr else ""
         import logging
         logging.debug("poll exhausted. ssh rc=%s", result.returncode)
         logging.debug("poll stderr: %s", result.stderr)
         logging.debug("kernel proc poll: %s", self._kernel_proc.poll() if self._kernel_proc else None)
         logging.debug("remote stderr: %s", err)
-        logging.debug("kproc stdout: %s", kproc_out)
-        logging.debug("kproc stderr: %s", kproc_err)
         raise RuntimeError(
             f"connection file not ready after {retries} retries: {self._conn_file}"
             f"\nremote stderr: {err}"
-            f"\nkernel out: {kproc_out}"
-            f"\nkernel err: {kproc_err}"
         )
 
     def _start_tunnels(self) -> None:

@@ -329,9 +329,10 @@ class NotebookView(Widget):
     async def _render_cells(self) -> None:
         scroll = self.query_one("#nb-scroll", VerticalScroll)
         scroll.remove_children()
-        for i, cell in enumerate(self._cells):
-            card = CellCard(cell, i)
-            await scroll.mount(card)
+        # Batch mount: one layout pass instead of N.
+        cards = [CellCard(cell, i) for i, cell in enumerate(self._cells)]
+        if cards:
+            await scroll.mount_all(cards)
         if self._cells:
             self._focus_cell(0)
 
