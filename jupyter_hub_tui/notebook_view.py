@@ -408,8 +408,8 @@ class NotebookView(Widget):
         if not images:
             return
         try:
-            from textual_image.widget import TGPImage
-            from PIL import Image
+            from textual_image.renderable.tgp import Image as TGPRenderable
+            from PIL import Image as PILImage
         except ImportError:
             return
         try:
@@ -418,10 +418,13 @@ class NotebookView(Widget):
             return
         for child in list(container.children):
             child.remove()
+        # Use Static with TGP renderable, not TGPImage widget.
+        # TGPImage re-uploads image data every refresh, killing performance.
         for img_bytes in images:
             try:
-                img = Image.open(io.BytesIO(img_bytes))
-                await container.mount(TGPImage(img))
+                pil_img = PILImage.open(io.BytesIO(img_bytes))
+                renderable = TGPRenderable(pil_img)
+                await container.mount(Static(renderable))
             except Exception:
                 pass
         container.add_class("has-images")

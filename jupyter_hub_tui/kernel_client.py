@@ -56,7 +56,6 @@ class RemoteKernel:
 
     def start(self, timeout: int = 30) -> None:
         # Start remote kernel, read connection file, set up tunnels.
-        self._ssh.wait_for_master(self._node)
         self._launch_remote_kernel()
         self._read_connection_file()
         self._start_tunnels()
@@ -89,12 +88,6 @@ class RemoteKernel:
             + f" 2>{self._stderr_file}"
         )
         cmd = self._ssh_cmd() + [launcher]
-        import logging
-        logging.basicConfig(filename="/tmp/jhtui-debug.log", level=logging.DEBUG)
-        logging.debug("kernel launch cmd: %s", cmd)
-        logging.debug("launcher: %s", launcher)
-        # DEVNULL: conda activation output fills 64KB PIPE buffer and
-        # deadlocks the kernel. Remote stderr already captured in log file.
         self._kernel_proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
@@ -114,44 +107,32 @@ class RemoteKernel:
             return ""
 
     def _read_connection_file(self, retries: int = 40) -> None:
-        # Fail fast if kernel already died.
-        if self._kernel_proc and self._kernel_proc.poll() is not None:
-            err = self._read_remote_stderr()
-            raise RuntimeError(
-                f"kernel exited (code {self._kernel_proc.returncode})"
-                f"\nremote stderr: {err}"
-            )
-        # Single SSH command that polls on the remote side.
-        waiter = (
-            f"for i in $(seq 1 {retries}); do "
-            f"if [ -f {self._conn_file} ]; then cat {self._conn_file}; exit 0; fi; "
-            f"sleep 0.5; "
-            f"done; exit 1"
-        )
-        cmd = self._ssh_cmd() + [waiter]
-        try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=retries * 0.5 + 10
-            )
-        except subprocess.TimeoutExpired:
-            err = self._read_remote_stderr()
-            raise RuntimeError(
-                f"connection file wait timed out: {self._conn_file}"
-                + (f"\nremote stderr:\n{err}" if err else "")
-            )
-        if result.returncode == 0 and result.stdout.strip():
+        import time as _time
+        for attempt in range(retries):
+            # Fail fast if kernel process died.
+            if self._kernel_proc and self._kernel_proc.poll() is not None:
+                err = self._read_remote_stderr()
+                raise RuntimeError(
+                    f"kernel exited (code {self._kernel_proc.returncode})"
+                    f"\nremote stderr: {err}"
+                )
+            # Brief SSH: open, cat, close. Does not hold a mux session long.
+            cmd = self._ssh_cmd() + [f"cat {self._conn_file} 2>/dev/null"]
             try:
-                self._conn_info = json.loads(result.stdout)
-                return
-            except json.JSONDecodeError:
-                pass
-        # Poll exhausted without getting the file.
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=5
+                )
+            except subprocess.TimeoutExpired:
+                _time.sleep(0.5)
+                continue
+            if result.returncode == 0 and result.stdout.strip():
+                try:
+                    self._conn_info = json.loads(result.stdout)
+                    return
+                except json.JSONDecodeError:
+                    pass
+            _time.sleep(0.5)
         err = self._read_remote_stderr()
-        import logging
-        logging.debug("poll exhausted. ssh rc=%s", result.returncode)
-        logging.debug("poll stderr: %s", result.stderr)
-        logging.debug("kernel proc poll: %s", self._kernel_proc.poll() if self._kernel_proc else None)
-        logging.debug("remote stderr: %s", err)
         raise RuntimeError(
             f"connection file not ready after {retries} retries: {self._conn_file}"
             f"\nremote stderr: {err}"

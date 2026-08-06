@@ -280,7 +280,10 @@ class TerminalDisplay(Widget):
             text = self._process_apc(text)
             if text:
                 self._stream.feed(text)
-            self._refresh_display()
+            # Only refresh if pyte reports dirty lines.
+            if self._screen.dirty:
+                self._screen.dirty.clear()
+                self._refresh_display()
         if self._pid is not None:
             try:
                 pid, status = os.waitpid(self._pid, os.WNOHANG)
