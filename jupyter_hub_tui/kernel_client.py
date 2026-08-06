@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import json
 import os
-import shlex
 import signal
 import subprocess
 import time
@@ -75,22 +74,19 @@ class RemoteKernel:
                 break
 
     def _launch_remote_kernel(self) -> None:
-        node = self._ssh.nodes[self._node]
-        cp = self._ssh._control_path(self._node)
+        # SSH exec that starts ipykernel on remote. Blocks (kernel runs).
+        parts = [self._venv_cmd] if self._venv_cmd else []
+        prefix = " && ".join(parts) + " && " if parts else ""
         self._conn_file = f"/tmp/jhtui-kernel-{int(time.time() * 1000)}.json"
         self._stderr_file = f"/tmp/jhtui-kernel-stderr-{int(time.time() * 1000)}.log"
         env_prefix = f"PYTHONPATH={self._pythonpath} " if self._pythonpath else ""
-        # Build remote command. Use bash -ic so .bashrc is sourced
-        # interactively (conda/env functions live behind the guard).
-        venv = self._venv_cmd + " && " if self._venv_cmd else ""
-        remote = (
-            venv
+        launcher = (
+            prefix
             + env_prefix
             + f"python -m ipykernel_launcher --ip=127.0.0.1 -f {self._conn_file}"
             + f" 2>{self._stderr_file}"
         )
-        ssh_cmd = self._ssh_cmd()
-        cmd = ssh_cmd + [f"bash -ic {shlex.quote(remote)}"]
+        cmd = self._ssh_cmd() + [launcher]
         self._kernel_proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
@@ -98,18 +94,8 @@ class RemoteKernel:
         )
 
     def _ssh_cmd(self) -> list[str]:
-        node = self._ssh.nodes[self._node]
-        cp = self._ssh._control_path(self._node)
-        cmd = ["ssh", "-T",
-            "-o", "ControlMaster=auto",
-            "-o", f"ControlPath={cp}",
-            "-o", "ControlPersist=120",
-        ]
-        if node.proxy and node.proxy in self._ssh.nodes:
-            proxy = self._ssh.nodes[node.proxy]
-            cmd += ["-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}"]
-        cmd += ["-p", str(node.port), f"{node.user}@{node.host}"]
-        return cmd
+        # Reuse the interactive terminal's ControlMaster socket.
+        return self._ssh._ssh_prefix(self._node)
 
     def _read_remote_stderr(self) -> str:
         cmd = self._ssh_cmd() + [f"cat {self._stderr_file}"]
@@ -128,7 +114,7 @@ class RemoteKernel:
                 + (f"\nremote stderr:\n{err}" if err else "\n(no remote stderr)")
             )
         # Single SSH command that polls on the remote side.
-        # Avoids flooding the ControlMaster socket with 40 separate SSH connections.
+        # Avoids 40 separate SSH connections flooding the ControlMaster socket.
         waiter = (
             f"for i in $(seq 1 {retries}); do"
             f"  if [ -f {self._conn_file} ]; then cat {self._conn_file}; exit 0; fi"
