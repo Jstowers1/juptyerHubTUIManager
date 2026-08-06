@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import pty
 import select
@@ -833,6 +834,12 @@ class TerminalDisplay(Widget):
                         dirty_rows[y] = screen.render_row(y)
                 screen.dirty.clear()
             if dirty_rows:
+                # Cap backlog. Drop oldest when paused so resume does not flood.
+                if self._read_queue.qsize() > 8:
+                    try:
+                        self._read_queue.get_nowait()
+                    except _queue.Empty:
+                        pass
                 self._read_queue.put(dirty_rows)
 
     def send_input(self, data: str) -> None:
@@ -843,18 +850,23 @@ class TerminalDisplay(Widget):
                 pass
 
     def send_key(self, key: str, char: str | None) -> None:
+        # MUST only os.write and return. No refresh() here.
         data = key_to_bytes(key, char)
         if not data or self._master_fd is None or not self._pty_running:
             return
-        import errno
-        for _ in range(3):
+        fd = self._master_fd
+        for _ in range(5):
             try:
-                os.write(self._master_fd, data)
+                os.write(fd, data)
                 return
             except OSError as e:
-                if e.errno == errno.EAGAIN:
-                    continue
-                return
+                if e.errno != errno.EAGAIN:
+                    return
+                # Buffer full. Wait for write-readiness, not a zero-delay spin.
+                try:
+                    select.select([], [fd], [], 0.01)
+                except (OSError, ValueError):
+                    return
 
     def _drain_queue(self) -> None:
         if not self._pty_running:
@@ -903,6 +915,12 @@ class TerminalDisplay(Widget):
 
     # Timer drains queue at 60fps. Pause/resume controls visibility.
     def pause_polling(self) -> None:
+        # Drain stale items so resume does not replay an old backlog.
+        while True:
+            try:
+                self._read_queue.get_nowait()
+            except _queue.Empty:
+                break
         if self._poll_timer is not None:
             self._poll_timer.stop()
             self._poll_timer = None
