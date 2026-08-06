@@ -728,6 +728,7 @@ class TerminalDisplay(Widget):
         self._reader_thread: Optional[threading.Thread] = None
         self._reader_stop = threading.Event()
         self._grid_lock = threading.Lock()
+        self._drain_pending = threading.Event()
 
     @property
     def pty_active(self) -> bool:
@@ -832,11 +833,14 @@ class TerminalDisplay(Widget):
                 screen.dirty.clear()
             if dirty_rows:
                 self._read_queue.put(dirty_rows)
-                # Push to event loop immediately. Zero-latency update.
-                try:
-                    self.app.call_from_thread(self._drain_queue)
-                except RuntimeError:
-                    pass
+                # Coalesce: only schedule one drain at a time.
+                # Prevents queue flood during output bursts.
+                if not self._drain_pending.is_set():
+                    self._drain_pending.set()
+                    try:
+                        self.app.call_from_thread(self._drain_queue)
+                    except RuntimeError:
+                        pass
 
     def send_input(self, data: str) -> None:
         if self._master_fd is not None and self._pty_running:
@@ -849,21 +853,31 @@ class TerminalDisplay(Widget):
         data = key_to_bytes(key, char)
         if not data or self._master_fd is None or not self._pty_running:
             return
-        try:
-            os.write(self._master_fd, data)
-        except OSError:
-            pass
+        import errno
+        for _ in range(5):
+            try:
+                os.write(self._master_fd, data)
+                return
+            except OSError as e:
+                if e.errno == errno.EAGAIN:
+                    # PTY buffer full. Wait briefly and retry.
+                    import time
+                    time.sleep(0.001)
+                    continue
+                return
 
     def _drain_queue(self) -> None:
         if not self._pty_running:
+            self._drain_pending.clear()
             return
         dirty = False
-        for _ in range(20):
+        for _ in range(50):
             try:
                 item = self._read_queue.get_nowait()
             except _queue.Empty:
                 break
             if item is None:
+                self._drain_pending.clear()
                 self._handle_exit()
                 return
             self._connected = True
@@ -876,6 +890,11 @@ class TerminalDisplay(Widget):
             dirty = True
         if dirty:
             self.refresh()
+        # Clear flag. If reader produced more during drain, re-schedule.
+        if not self._read_queue.empty():
+            self.app.call_later(self._drain_queue)
+        else:
+            self._drain_pending.clear()
 
     def _resize_pty(self) -> None:
         if self._master_fd is None:
