@@ -48,7 +48,7 @@ No euporie, no browser, no JupyterHub. The TUI talks to the kernel directly.
 ```
 jupyter_hub_tui/
   app.py            Main TUI. Tabs, sidebar, keybindings, screens.
-  terminal.py       Embedded PTY terminal (pyte). SSH shell lives here.
+  terminal.py       Embedded PTY terminal (custom VT100 parser). SSH shell lives here.
   notebook_view.py  Notebook renderer. Cell editors, output, images.
   kernel_client.py  Remote IPython kernel manager. SSH tunnels + ZMQ.
   ssh_manager.py    SSH command builder. ControlMaster, proxy jumps.

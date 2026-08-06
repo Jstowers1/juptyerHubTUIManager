@@ -1,6 +1,6 @@
 # APC parser for kitty graphics protocol.
 # Buffers incomplete APC sequences across PTY reads.
-# Returns clean text for pyte and complete APC sequences for forwarding.
+# Returns clean text for screen parser and complete APC sequences for forwarding.
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ class APCStream:
         self._buf = ""
 
     def feed(self, data: str) -> tuple[str, list[str]]:
-        # Feed raw text. Returns (clean_for_pyte, apc_sequences).
+        # Feed raw text. Returns (clean_for_screen, apc_sequences).
         self._buf += data
         clean: list[str] = []
         apcs: list[str] = []

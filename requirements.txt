@@ -1,5 +1,4 @@
 textual>=8.2
-pyte>=0.8
 nbformat>=5.10
 jupyter-client>=8.9
 ipykernel>=7.0
