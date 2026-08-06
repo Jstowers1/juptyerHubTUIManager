@@ -1022,6 +1022,14 @@ class GitBranchScreen(ModalScreen):
 
 
 def main() -> None:
+    # Pre-cache terminal cell size before Textual takes over stdin.
+    # textual_image's get_cell_size reads stdin on first call, racing
+    # with Textual's input thread and swallowing keystrokes.
+    try:
+        from textual_image._terminal import get_cell_size
+        get_cell_size()
+    except Exception:
+        pass
     app = JupyterHubTUI()
     app.run()
 

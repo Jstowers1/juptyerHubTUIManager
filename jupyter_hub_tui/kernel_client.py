@@ -95,8 +95,22 @@ class RemoteKernel:
         )
 
     def _ssh_cmd(self) -> list[str]:
-        # Reuse the interactive terminal's ControlMaster socket.
-        return self._ssh._ssh_prefix(self._node)
+        # Separate ControlPath so kernel traffic does not congest the
+        # interactive terminal's SSH socket.
+        node = self._ssh.nodes[self._node]
+        cp = f"/tmp/jhtui-kernel-{self._node}"
+        cmd = ["ssh",
+            "-o", "ControlMaster=auto",
+            "-o", f"ControlPath={cp}",
+            "-o", "ControlPersist=120",
+            "-o", "ConnectTimeout=5",
+            "-o", "BatchMode=yes",
+        ]
+        if node.proxy and node.proxy in self._ssh.nodes:
+            proxy = self._ssh.nodes[node.proxy]
+            cmd += ["-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}"]
+        cmd += ["-p", str(node.port), f"{node.user}@{node.host}"]
+        return cmd
 
     def _read_remote_stderr(self) -> str:
         cmd = self._ssh_cmd() + [f"cat {self._stderr_file}"]
@@ -139,7 +153,8 @@ class RemoteKernel:
         )
 
     def _start_tunnels(self) -> None:
-        # Forward each ZMQ port via a single SSH -L multiplexed connection.
+        # Forward ZMQ ports via a dedicated SSH connection.
+        # Separate ControlPath isolates kernel traffic from interactive keys.
         ports = [
             self._conn_info["shell_port"],
             self._conn_info["iopub_port"],
@@ -148,7 +163,7 @@ class RemoteKernel:
             self._conn_info["hb_port"],
         ]
         node = self._ssh.nodes[self._node]
-        cp = self._ssh._control_path(self._node)
+        cp = f"/tmp/jhtui-kernel-{self._node}"
         cmd = ["ssh",
             "-o", "ControlMaster=auto",
             "-o", f"ControlPath={cp}",
@@ -288,6 +303,7 @@ def _self_check() -> None:
     assert RemoteKernel.execute.__name__ == "execute"
     assert CellResult().images == []
     assert CellResult().error is None
+    assert CellResult().stdout == ""
     print("kernel_client self-check passed")
 
 
