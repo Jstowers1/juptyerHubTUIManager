@@ -417,10 +417,10 @@ class Screen:
                         j += 1
                     if j < n:
                         final = data[j]
-                        params = [int(p) if p else 0 for p in params_str.split(";") if p != ""]
-                        if not params and params_str == "":
-                            params = []
-                        self._handle_csi(final, params, params_str)
+                        # Strip private-mode marker (?) so int() does not crash.
+                        clean_ps = params_str.lstrip("?")
+                        params = [int(p) if p else 0 for p in clean_ps.split(";") if p != ""]
+                        self._handle_csi(final, params, clean_ps)
                         i = j + 1
                     else:
                         break
@@ -1039,5 +1039,11 @@ if __name__ == "__main__":
     assert s.grid[0][0].char == "\u250c", f"got {s.grid[0][0].char!r}"
     assert s.grid[0][1].char == "\u2500", f"got {s.grid[0][1].char!r}"
     print("test14 pass: DEC special graphics")
+
+    # Self-check: private-mode CSI (?2004h bracketed paste).
+    s = Screen(10, 1)
+    s.feed("\x1b[?2004h")
+    s.feed("\x1b[?2004l")
+    print("test15 pass: private-mode CSI")
 
     print("ALL PASS")
