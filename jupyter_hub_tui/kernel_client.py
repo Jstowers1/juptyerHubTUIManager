@@ -191,8 +191,12 @@ class RemoteKernel:
         import queue as _queue
         if self._kc is None:
             return CellResult(error="kernel not started")
-        # Drain stale iopub messages quickly.
-        self._kc.iopub_channel.flush()
+        # Drain stale iopub messages.
+        while True:
+            try:
+                self._kc.get_iopub_msg(timeout=0.01)
+            except _queue.Empty:
+                break
         msg_id = self._kc.execute(code, store_history=True)
         result = CellResult()
         deadline = time.monotonic() + timeout

@@ -9,6 +9,8 @@ import select
 import struct
 import fcntl
 import termios
+import threading
+import queue as _queue
 from typing import Optional
 
 from rich.text import Text
@@ -723,6 +725,9 @@ class TerminalDisplay(Widget):
         self._row_cache: list[Text] = [Text(" " * 80) for _ in range(24)]
         self._cached_render: Optional[Text] = None
         self._pending_text: str = ""
+        self._read_queue: _queue.Queue[bytes] = _queue.Queue()
+        self._reader_thread: Optional[threading.Thread] = None
+        self._reader_stop = threading.Event()
 
     @property
     def pty_active(self) -> bool:
@@ -777,7 +782,33 @@ class TerminalDisplay(Widget):
             flags = fcntl.fcntl(self._master_fd, fcntl.F_GETFL)
             fcntl.fcntl(self._master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
             self._resize_pty()
+            # Start background reader thread. Never blocks event loop on PTY I/O.
+            self._reader_stop.clear()
+            self._reader_thread = threading.Thread(
+                target=self._reader_loop, daemon=True
+            )
+            self._reader_thread.start()
             self._poll_timer = self.set_interval(0.05, self._poll_pty)
+
+    def _reader_loop(self) -> None:
+        # Background thread: blocks on select, puts PTY data into queue.
+        fd = self._master_fd
+        while not self._reader_stop.is_set():
+            try:
+                ready, _, _ = select.select([fd], [], [], 0.2)
+            except (OSError, ValueError):
+                break
+            if not ready:
+                continue
+            try:
+                data = os.read(fd, 65536)
+            except OSError:
+                self._read_queue.put(b"")  # Signal EOF.
+                return
+            if not data:
+                self._read_queue.put(b"")  # Signal EOF.
+                return
+            self._read_queue.put(data)
 
     def send_input(self, data: str) -> None:
         if self._master_fd is not None and self._pty_running:
@@ -847,27 +878,21 @@ class TerminalDisplay(Widget):
         return clean
 
     def _poll_pty(self) -> None:
-        if not self._pty_running or self._master_fd is None:
+        if not self._pty_running:
             return
         chunks = []
-        # Drain pending text from prior burst first.
+        # Drain pending text first.
         if self._pending_text:
-            chunk, self._pending_text = self._pending_text[:4096], self._pending_text[4096:]
+            chunk, self._pending_text = self._pending_text[:16384], self._pending_text[16384:]
             chunks.append(chunk.encode("utf-8", errors="replace"))
-        # Cap iterations per poll so one burst never starves the event loop.
-        for _ in range(3):
+        # Drain reader thread queue (non-blocking).
+        for _ in range(10):
             try:
-                ready, _, _ = select.select([self._master_fd], [], [], 0)
-            except (OSError, ValueError):
+                data = self._read_queue.get_nowait()
+            except _queue.Empty:
                 break
-            if not ready:
-                break
-            try:
-                data = os.read(self._master_fd, 65536)
-            except OSError:
-                self._handle_exit()
-                return
             if not data:
+                # EOF signal from reader thread.
                 self._handle_exit()
                 return
             chunks.append(data)
@@ -879,10 +904,10 @@ class TerminalDisplay(Widget):
             text = self._process_apc(text)
             if text:
                 # Cap feed size so parser never blocks event loop too long.
-                # ~4KB of text parses in ~1ms. Extra stays for next tick.
-                if len(text) > 4096:
-                    self._pending_text = text[4096:] + self._pending_text
-                    text = text[:4096]
+                # ~16KB of text parses in ~4ms. Extra stays for next tick.
+                if len(text) > 16384:
+                    self._pending_text = text[16384:] + self._pending_text
+                    text = text[:16384]
                 self._screen.feed(text)
             if self._screen.dirty:
                 for y in self._screen.dirty:
@@ -905,6 +930,7 @@ class TerminalDisplay(Widget):
         self._pty_running = False
         self.can_focus = False
         self._stop_timer()
+        self._reader_stop.set()
         if self._pid is not None:
             try:
                 os.waitpid(self._pid, 0)
