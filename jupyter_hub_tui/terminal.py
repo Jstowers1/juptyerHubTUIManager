@@ -725,9 +725,10 @@ class TerminalDisplay(Widget):
         self._row_cache: list[Text] = [Text(" " * 80) for _ in range(24)]
         self._cached_render: Optional[Text] = None
         self._pending_text: str = ""
-        self._read_queue: _queue.Queue[bytes] = _queue.Queue()
+        self._read_queue: _queue.Queue = _queue.Queue()
         self._reader_thread: Optional[threading.Thread] = None
         self._reader_stop = threading.Event()
+        self._grid_lock = threading.Lock()
 
     @property
     def pty_active(self) -> bool:
@@ -791,11 +792,13 @@ class TerminalDisplay(Widget):
             self._poll_timer = self.set_interval(0.05, self._poll_pty)
 
     def _reader_loop(self) -> None:
-        # Background thread: blocks on select, puts PTY data into queue.
+        # Background thread: reads PTY, parses ANSI, renders rows.
+        # Event loop only joins ready Text objects. Zero parsing on main thread.
         fd = self._master_fd
+        screen = self._screen
         while not self._reader_stop.is_set():
             try:
-                ready, _, _ = select.select([fd], [], [], 0.2)
+                ready, _, _ = select.select([fd], [], [], 0.1)
             except (OSError, ValueError):
                 break
             if not ready:
@@ -803,12 +806,34 @@ class TerminalDisplay(Widget):
             try:
                 data = os.read(fd, 65536)
             except OSError:
-                self._read_queue.put(b"")  # Signal EOF.
+                self._read_queue.put(None)
                 return
             if not data:
-                self._read_queue.put(b"")  # Signal EOF.
+                self._read_queue.put(None)
                 return
-            self._read_queue.put(data)
+            text = data.decode("utf-8", errors="replace")
+            clean, apcs = self._apc.feed(text)
+            if apcs:
+                import sys
+                stdout = sys.__stdout__
+                if stdout is not None:
+                    try:
+                        for seq in apcs:
+                            stdout.write(seq)
+                        stdout.flush()
+                    except (OSError, ValueError):
+                        pass
+            if not clean:
+                continue
+            dirty_rows = {}
+            with self._grid_lock:
+                screen.feed(clean)
+                for y in screen.dirty:
+                    if y < len(self._row_cache):
+                        dirty_rows[y] = screen.render_row(y)
+                screen.dirty.clear()
+            if dirty_rows:
+                self._read_queue.put(dirty_rows)
 
     def send_input(self, data: str) -> None:
         if self._master_fd is not None and self._pty_running:
@@ -838,8 +863,9 @@ class TerminalDisplay(Widget):
             fcntl.ioctl(self._master_fd, termios.TIOCSWINSZ, winsize)
         except OSError:
             pass
-        self._screen.resize(h, w)
-        self._row_cache = [self._screen.render_row(y) for y in range(self._screen.rows)]
+        with self._grid_lock:
+            self._screen.resize(h, w)
+            self._row_cache = [self._screen.render_row(y) for y in range(self._screen.rows)]
         self._cached_render = None
         self.refresh()
 
@@ -863,66 +889,26 @@ class TerminalDisplay(Widget):
         if self._poll_timer is None and self._pty_running:
             self._poll_timer = self.set_interval(0.05, self._poll_pty)
 
-    def _process_apc(self, text: str) -> str:
-        clean, apcs = self._apc.feed(text)
-        if apcs:
-            import sys
-            stdout = sys.__stdout__
-            if stdout is not None:
-                try:
-                    for seq in apcs:
-                        stdout.write(seq)
-                    stdout.flush()
-                except (OSError, ValueError):
-                    pass
-        return clean
-
     def _poll_pty(self) -> None:
         if not self._pty_running:
             return
-        chunks = []
-        # Drain pending text first.
-        if self._pending_text:
-            chunk, self._pending_text = self._pending_text[:16384], self._pending_text[16384:]
-            chunks.append(chunk.encode("utf-8", errors="replace"))
-        # Drain reader thread queue (non-blocking).
-        for _ in range(10):
+        # Drain rendered rows from the reader thread (non-blocking).
+        for _ in range(20):
             try:
-                data = self._read_queue.get_nowait()
+                item = self._read_queue.get_nowait()
             except _queue.Empty:
                 break
-            if not data:
-                # EOF signal from reader thread.
+            if item is None:
                 self._handle_exit()
                 return
-            chunks.append(data)
-        if chunks:
             self._connected = True
             if not self._overlay_done:
                 self._overlay_done = True
-            text = b"".join(chunks).decode("utf-8", errors="replace")
-            text = self._process_apc(text)
-            if text:
-                # Cap feed size so parser never blocks event loop too long.
-                # ~16KB of text parses in ~4ms. Extra stays for next tick.
-                if len(text) > 16384:
-                    self._pending_text = text[16384:] + self._pending_text
-                    text = text[:16384]
-                self._screen.feed(text)
-            if self._screen.dirty:
-                for y in self._screen.dirty:
-                    if y < len(self._row_cache):
-                        self._row_cache[y] = self._screen.render_row(y)
-                self._cached_render = None
-                self._screen.dirty.clear()
-                self.refresh()
-        if self._pid is not None:
-            try:
-                pid, status = os.waitpid(self._pid, os.WNOHANG)
-                if pid != 0:
-                    self._handle_exit(status)
-            except ChildProcessError:
-                self._handle_exit()
+            for y, row_text in item.items():
+                if y < len(self._row_cache):
+                    self._row_cache[y] = row_text
+            self._cached_render = None
+            self.refresh()
 
     def _handle_exit(self, status: int = 0) -> None:
         if not self._pty_running:
@@ -976,8 +962,9 @@ class TerminalDisplay(Widget):
     def reset(self) -> None:
         w = max(1, self.size.width)
         h = max(1, self.size.height)
-        self._screen = Screen(w, h)
-        self._row_cache = [self._screen.render_row(y) for y in range(self._screen.rows)]
+        with self._grid_lock:
+            self._screen = Screen(w, h)
+            self._row_cache = [self._screen.render_row(y) for y in range(self._screen.rows)]
         self._cached_render = None
         self.refresh()
 
