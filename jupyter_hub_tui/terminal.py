@@ -846,12 +846,14 @@ class TerminalDisplay(Widget):
         data = key_to_bytes(key, char)
         if not data or self._master_fd is None or not self._pty_running:
             return
-        # Try once. EAGAIN = buffer full, key is lost.
-        # Never block the event loop waiting for buffer space.
         try:
             os.write(self._master_fd, data)
         except OSError:
             pass
+        # Drain reader queue immediately for instant echo.
+        # Key echo comes back through PTY in microseconds.
+        # Reader thread has already rendered it by now.
+        self._poll_pty()
 
     def _resize_pty(self) -> None:
         if self._master_fd is None:
@@ -892,7 +894,7 @@ class TerminalDisplay(Widget):
     def _poll_pty(self) -> None:
         if not self._pty_running:
             return
-        # Drain rendered rows from the reader thread (non-blocking).
+        dirty = False
         for _ in range(20):
             try:
                 item = self._read_queue.get_nowait()
@@ -908,6 +910,8 @@ class TerminalDisplay(Widget):
                 if y < len(self._row_cache):
                     self._row_cache[y] = row_text
             self._cached_render = None
+            dirty = True
+        if dirty:
             self.refresh()
 
     def _handle_exit(self, status: int = 0) -> None:
