@@ -915,6 +915,15 @@ class TerminalDisplay(Widget):
 
     # Timer drains queue at 60fps. Pause/resume controls visibility.
     def pause_polling(self) -> None:
+        # Stop the reader thread to prevent GIL contention.
+        # When hidden behind a notebook tab, the reader burns CPU
+        # parsing ANSI and rendering rows that nobody sees,
+        # stealing GIL time from the event loop and swallowing keys.
+        self._reader_stop.set()
+        if self._reader_thread is not None:
+            self._reader_thread.join(timeout=0.5)
+            self._reader_thread = None
+        self._reader_stop.clear()
         # Drain stale items so resume does not replay an old backlog.
         while True:
             try:
@@ -927,6 +936,13 @@ class TerminalDisplay(Widget):
 
     def resume_polling(self) -> None:
         if self._poll_timer is None and self._pty_running:
+            # Restart reader thread.
+            if self._reader_thread is None and self._master_fd is not None:
+                self._reader_stop.clear()
+                self._reader_thread = threading.Thread(
+                    target=self._reader_loop, daemon=True
+                )
+                self._reader_thread.start()
             self._poll_timer = self.set_interval(0.016, self._drain_queue)
 
     def _handle_exit(self, status: int = 0) -> None:
