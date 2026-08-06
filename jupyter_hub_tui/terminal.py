@@ -850,13 +850,11 @@ class TerminalDisplay(Widget):
         for _ in range(3):
             try:
                 os.write(self._master_fd, data)
-                break
+                return
             except OSError as e:
                 if e.errno == errno.EAGAIN:
                     continue
                 return
-        # Immediate drain so echo shows without waiting 16ms.
-        self._drain_queue()
 
     def _drain_queue(self) -> None:
         if not self._pty_running:
