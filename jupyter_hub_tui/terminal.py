@@ -715,7 +715,6 @@ class TerminalDisplay(Widget):
         self._master_fd: Optional[int] = None
         self._pid: Optional[int] = None
         self._pty_running = False
-        self._poll_timer = None
         self._command: list[str] = []
         self._pending_start = False
         self._connected = False
@@ -789,7 +788,6 @@ class TerminalDisplay(Widget):
                 target=self._reader_loop, daemon=True
             )
             self._reader_thread.start()
-            self._poll_timer = self.set_interval(0.05, self._poll_pty)
 
     def _reader_loop(self) -> None:
         # Background thread: reads PTY, parses ANSI, renders rows.
@@ -834,6 +832,11 @@ class TerminalDisplay(Widget):
                 screen.dirty.clear()
             if dirty_rows:
                 self._read_queue.put(dirty_rows)
+                # Push to event loop immediately. Zero-latency update.
+                try:
+                    self.app.call_from_thread(self._drain_queue)
+                except RuntimeError:
+                    pass
 
     def send_input(self, data: str) -> None:
         if self._master_fd is not None and self._pty_running:
@@ -850,10 +853,29 @@ class TerminalDisplay(Widget):
             os.write(self._master_fd, data)
         except OSError:
             pass
-        # Drain reader queue immediately for instant echo.
-        # Key echo comes back through PTY in microseconds.
-        # Reader thread has already rendered it by now.
-        self._poll_pty()
+
+    def _drain_queue(self) -> None:
+        if not self._pty_running:
+            return
+        dirty = False
+        for _ in range(20):
+            try:
+                item = self._read_queue.get_nowait()
+            except _queue.Empty:
+                break
+            if item is None:
+                self._handle_exit()
+                return
+            self._connected = True
+            if not self._overlay_done:
+                self._overlay_done = True
+            for y, row_text in item.items():
+                if y < len(self._row_cache):
+                    self._row_cache[y] = row_text
+            self._cached_render = None
+            dirty = True
+        if dirty:
+            self.refresh()
 
     def _resize_pty(self) -> None:
         if self._master_fd is None:
@@ -877,49 +899,19 @@ class TerminalDisplay(Widget):
         else:
             self._resize_pty()
 
-    def _stop_timer(self) -> None:
-        if self._poll_timer is not None:
-            self._poll_timer.stop()
-            self._poll_timer = None
-
+    # Timer is gone. Reader thread pushes via call_from_thread.
+    # These stay as no-ops for app.py compatibility.
     def pause_polling(self) -> None:
-        if self._poll_timer is not None:
-            self._poll_timer.stop()
-            self._poll_timer = None
+        pass
 
     def resume_polling(self) -> None:
-        if self._poll_timer is None and self._pty_running:
-            self._poll_timer = self.set_interval(0.05, self._poll_pty)
-
-    def _poll_pty(self) -> None:
-        if not self._pty_running:
-            return
-        dirty = False
-        for _ in range(20):
-            try:
-                item = self._read_queue.get_nowait()
-            except _queue.Empty:
-                break
-            if item is None:
-                self._handle_exit()
-                return
-            self._connected = True
-            if not self._overlay_done:
-                self._overlay_done = True
-            for y, row_text in item.items():
-                if y < len(self._row_cache):
-                    self._row_cache[y] = row_text
-            self._cached_render = None
-            dirty = True
-        if dirty:
-            self.refresh()
+        pass
 
     def _handle_exit(self, status: int = 0) -> None:
         if not self._pty_running:
             return
         self._pty_running = False
         self.can_focus = False
-        self._stop_timer()
         self._reader_stop.set()
         if self._pid is not None:
             try:
@@ -949,7 +941,6 @@ class TerminalDisplay(Widget):
         self._connected = False
         self._overlay_done = False
         self.can_focus = False
-        self._stop_timer()
         if self._pid is not None:
             try:
                 os.killpg(os.getpgid(self._pid), 9)
