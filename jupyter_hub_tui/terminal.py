@@ -230,9 +230,10 @@ class TerminalDisplay(Widget):
     def pause_polling(self) -> None:
         if self._poll_timer is not None:
             self._poll_timer.stop()
+            self._poll_timer = None
 
     def resume_polling(self) -> None:
-        if self._poll_timer is not None and self._pty_running:
+        if self._poll_timer is None and self._pty_running:
             self._poll_timer = self.set_interval(0.1, self._poll_pty)
 
     def _process_apc(self, text: str) -> str:

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import signal
 import subprocess
 import time
@@ -74,19 +75,22 @@ class RemoteKernel:
                 break
 
     def _launch_remote_kernel(self) -> None:
-        # SSH exec that starts ipykernel on remote. Blocks (kernel runs).
-        parts = [self._venv_cmd] if self._venv_cmd else []
-        prefix = " && ".join(parts) + " && " if parts else ""
+        node = self._ssh.nodes[self._node]
+        cp = self._ssh._control_path(self._node)
         self._conn_file = f"/tmp/jhtui-kernel-{int(time.time() * 1000)}.json"
         self._stderr_file = f"/tmp/jhtui-kernel-stderr-{int(time.time() * 1000)}.log"
         env_prefix = f"PYTHONPATH={self._pythonpath} " if self._pythonpath else ""
-        launcher = (
-            prefix
+        # Build remote command. Use bash -ic so .bashrc is sourced
+        # interactively (conda/env functions live behind the guard).
+        venv = self._venv_cmd + " && " if self._venv_cmd else ""
+        remote = (
+            venv
             + env_prefix
             + f"python -m ipykernel_launcher --ip=127.0.0.1 -f {self._conn_file}"
             + f" 2>{self._stderr_file}"
         )
-        cmd = self._ssh_cmd() + [launcher]
+        ssh_cmd = self._ssh_cmd()
+        cmd = ssh_cmd + [f"bash -ic {shlex.quote(remote)}"]
         self._kernel_proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
@@ -116,6 +120,13 @@ class RemoteKernel:
             return ""
 
     def _read_connection_file(self, retries: int = 40) -> None:
+        # Fail fast if kernel already died.
+        if self._kernel_proc and self._kernel_proc.poll() is not None:
+            err = self._read_remote_stderr()
+            raise RuntimeError(
+                f"kernel process exited (code {self._kernel_proc.returncode})"
+                + (f"\nremote stderr:\n{err}" if err else "\n(no remote stderr)")
+            )
         # Single SSH command that polls on the remote side.
         # Avoids flooding the ControlMaster socket with 40 separate SSH connections.
         waiter = (
