@@ -29,7 +29,8 @@ class CellState:
 
 
 class CellCard(Widget):
-    # One cell: editor + output area.
+    # One cell: editor + output area. Uses Static for display,
+    # swaps to TextArea only when focused for editing.
 
     DEFAULT_CSS = """
     CellCard {
@@ -44,6 +45,19 @@ class CellCard(Widget):
     }
     CellCard.error {
         border: round $error;
+    }
+    CellCard.focused {
+        border: round $accent;
+    }
+    CellCard .cell-source {
+        height: auto;
+        min-height: 1;
+        padding: 0 1;
+        color: $text;
+    }
+    CellCard .cell-source.markdown {
+        text-style: bold;
+        color: $primary;
     }
     CellCard TextArea {
         height: auto;
@@ -83,17 +97,17 @@ class CellCard(Widget):
         super().__init__()
         self.cell = cell
         self.index = index
+        self._editing = False
 
     def compose(self) -> ComposeResult:
         yield Static(
             f"[{self.index}] {self.cell.cell_type}",
             classes="cell-type-badge",
         )
-        editor = TextArea(
-            text=self.cell.source,
-            classes="cell-editor",
-        )
-        yield editor
+        cls = "cell-source"
+        if self.cell.cell_type == "markdown":
+            cls += " markdown"
+        yield Static(self.cell.source, classes=cls)
         output = Static("", classes="cell-output")
         yield output
         yield VerticalScroll(classes="cell-images")
@@ -101,11 +115,49 @@ class CellCard(Widget):
     def on_mount(self) -> None:
         self._render_output()
 
-    def get_source(self) -> str:
+    def _swap_to_editor(self) -> None:
+        if self._editing:
+            return
         try:
-            return self.query_one(TextArea).text
+            src = self.query_one(".cell-source", Static)
         except Exception:
-            return self.cell.source
+            return
+        editor = TextArea(text=self.cell.source, classes="cell-editor")
+        src.remove()
+        self.mount(editor)
+        self._editing = True
+        editor.focus()
+
+    def _swap_to_display(self) -> None:
+        if not self._editing:
+            return
+        try:
+            editor = self.query_one(TextArea)
+        except Exception:
+            return
+        self.cell.source = editor.text
+        editor.remove()
+        cls = "cell-source"
+        if self.cell.cell_type == "markdown":
+            cls += " markdown"
+        self.mount(Static(self.cell.source, classes=cls), before=".cell-output")
+        self._editing = False
+
+    def enter_edit_mode(self) -> None:
+        self._swap_to_editor()
+        self.add_class("focused")
+
+    def exit_edit_mode(self) -> None:
+        self._swap_to_display()
+        self.remove_class("focused")
+
+    def get_source(self) -> str:
+        if self._editing:
+            try:
+                return self.query_one(TextArea).text
+            except Exception:
+                pass
+        return self.cell.source
 
     def set_running(self, running: bool) -> None:
         self.cell.running = running
@@ -279,30 +331,22 @@ class NotebookView(Widget):
         if not self._cells:
             return
         idx = max(0, min(idx, len(self._cells) - 1))
-        self._active_cell = idx
+        # Exit edit mode on previous cell.
         scroll = self.query_one("#nb-scroll", VerticalScroll)
         cards = list(scroll.query(CellCard))
+        for c in cards:
+            if c._editing:
+                c.exit_edit_mode()
+        self._active_cell = idx
         if idx < len(cards):
-            try:
-                cards[idx].query_one(TextArea).focus()
-                scroll.scroll_to_widget(cards[idx])
-            except Exception:
-                pass
+            cards[idx].enter_edit_mode()
+            scroll.scroll_to_widget(cards[idx])
 
     def _current_card(self) -> CellCard | None:
-        # Find which CellCard owns the focused TextArea.
         scroll = self.query_one("#nb-scroll", VerticalScroll)
         cards = list(scroll.query(CellCard))
         if not cards:
             return None
-        focused = self.app.focused
-        for card in cards:
-            if focused is card or (
-                focused is not None and card in focused.ancestors
-            ):
-                self._active_cell = card.index
-                return card
-        # Fall back to tracked index.
         if self._active_cell < len(cards):
             return cards[self._active_cell]
         return cards[0]
