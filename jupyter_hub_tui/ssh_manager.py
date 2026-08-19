@@ -118,9 +118,32 @@ class SSHManager:
         ]
         return cmd
 
+    def _ensure_socket(self, name: str) -> None:
+        # Remove a stale ControlSocket: file exists, no live master behind.
+        # ssh -O check talks to the local socket only, no network needed.
+        cp = self._control_path(name)
+        if not os.path.exists(cp):
+            return
+        node = self._nodes[name]
+        cmd = ["ssh", "-o", f"ControlPath={cp}", "-o", "ConnectTimeout=5"]
+        if node.proxy and node.proxy in self._nodes:
+            proxy = self._nodes[node.proxy]
+            cmd += ["-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}"]
+        cmd += ["-O", "check", f"{node.user}@{node.host}"]
+        try:
+            r = subprocess.run(cmd, capture_output=True, timeout=5)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return
+        if r.returncode != 0:
+            try:
+                os.unlink(cp)
+            except OSError:
+                pass
+
     def wait_for_master(self, name: str, timeout: int = 15) -> bool:
         # Block until the interactive master socket is usable.
         import time as _time
+        self._ensure_socket(name)
         cp = self._control_path(name)
         check = self._ssh_prefix(name) + ["true"]
         deadline = _time.monotonic() + timeout
@@ -135,6 +158,7 @@ class SSHManager:
         return False
 
     def check_ssh_ready(self, name: str) -> bool:
+        self._ensure_socket(name)
         cmd = self._ssh_prefix(name) + ["echo ok"]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)

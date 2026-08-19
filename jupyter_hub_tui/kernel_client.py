@@ -99,10 +99,14 @@ class RemoteKernel:
         cmd = self._ssh_cmd() + [launcher]
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=45
+                cmd, capture_output=True, text=True, timeout=90
             )
         except subprocess.TimeoutExpired as e:
-            raise RuntimeError("kernel launch timed out") from e
+            partial = (e.stdout or "")[:500]
+            raise RuntimeError(
+                f"kernel launch timed out after 90s (slow node or conda?)"
+                f"\npartial output:\n{partial}"
+            ) from e
         if result.returncode != 0 or "KERNEL_DIED" in result.stdout:
             raise RuntimeError(
                 f"kernel launch failed (code {result.returncode})"
@@ -168,7 +172,13 @@ class RemoteKernel:
         except subprocess.TimeoutExpired as e:
             raise RuntimeError("tunnel setup timed out") from e
         if result.returncode != 0:
-            raise RuntimeError(f"tunnel setup failed: {result.stderr.strip()}")
+            hint = (
+                "No live SSH master. Reconnect the terminal to this node, "
+                "then reopen the notebook."
+            )
+            if "mux" in result.stderr.lower() or "control" in result.stderr.lower():
+                hint = "Stale ControlSocket removed. Reopen the notebook to retry."
+            raise RuntimeError(f"tunnel setup failed: {result.stderr.strip()}\n{hint}")
         self._forward_cmd = cmd
 
     def _stop_tunnels(self) -> None:
