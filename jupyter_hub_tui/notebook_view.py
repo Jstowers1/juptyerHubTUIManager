@@ -417,7 +417,7 @@ class NotebookView(Widget):
         # Kernel language from metadata, python fallback.
         lang = "python"
         try:
-            lang = nb.metadata["language_info"]["name"]
+            lang = self._nb.metadata["language_info"]["name"]
         except (AttributeError, KeyError, TypeError):
             pass
         # Batch mount: one layout pass instead of N.
