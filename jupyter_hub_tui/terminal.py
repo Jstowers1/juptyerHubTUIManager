@@ -22,6 +22,18 @@ from textual.widget import Widget
 from .apc import APCStream
 
 
+def _dbg(msg: str) -> None:
+    # Env-gated key-path tracer. JHTUI_DEBUG_KEYS=1 enables.
+    import os as _os
+    import time as _time
+    if _os.environ.get("JHTUI_DEBUG_KEYS"):
+        try:
+            with open("/tmp/jhtui-keys.log", "a") as f:
+                f.write(f"{_time.time():.6f} {msg}\n")
+        except OSError:
+            pass
+
+
 def key_to_bytes(key: str, char: str | None) -> bytes:
     special = {
         "enter": b"\r",
@@ -743,9 +755,12 @@ class TerminalDisplay(Widget):
     def on_key(self, event) -> None:
         if self._pty_running and self._master_fd is not None:
             if event.key in ESCAPE_HATCH_KEYS:
+                _dbg(f"on_key ESCAPE key={event.key!r}")
                 event.stop()
                 self.app.call_later(self.app.run_action, ESCAPE_HATCH_KEYS[event.key])
                 return
+            _dbg(f"on_key key={event.key!r} char={event.character!r} "
+                 f"focused={self.has_focus} qsize={self._key_queue.qsize()}")
             self.send_key(event.key, event.character)
             event.stop()
         elif self._pending_start:
@@ -865,8 +880,12 @@ class TerminalDisplay(Widget):
         # The writer thread does os.write with EAGAIN retries.
         data = key_to_bytes(key, char)
         if not data or self._master_fd is None or not self._pty_running:
+            _dbg(f"send_key DROP key={key!r} data={data!r} "
+                 f"fd={'set' if self._master_fd is not None else 'None'} "
+                 f"running={self._pty_running}")
             return
         self._key_queue.put(data)
+        _dbg(f"send_key ENQ key={key!r} bytes={data!r} qsize={self._key_queue.qsize()}")
 
     def _writer_loop(self) -> None:
         # Background thread: drains key queue, writes to PTY with retries.
@@ -879,17 +898,24 @@ class TerminalDisplay(Widget):
                 data = self._key_queue.get(timeout=0.1)
             except _queue.Empty:
                 continue
-            for _ in range(5):
+            wrote = False
+            for attempt in range(5):
                 try:
                     os.write(fd, data)
+                    wrote = True
+                    _dbg(f"writer WROTE bytes={data!r} attempt={attempt}")
                     break
                 except OSError as e:
                     if e.errno != errno.EAGAIN:
+                        _dbg(f"writer ERR bytes={data!r} errno={e.errno}")
                         break
+                    _dbg(f"writer EAGAIN bytes={data!r} attempt={attempt}")
                     try:
                         select.select([], [fd], [], 0.01)
                     except (OSError, ValueError):
                         break
+            if not wrote:
+                _dbg(f"writer DROP bytes={data!r} after 5 attempts")
 
     def _drain_queue(self) -> None:
         if not self._pty_running:
@@ -942,6 +968,7 @@ class TerminalDisplay(Widget):
         # When hidden behind a notebook tab, the reader burns CPU
         # parsing ANSI and rendering rows that nobody sees,
         # stealing GIL time from the event loop and swallowing keys.
+        _dbg("pause_polling")
         self._reader_stop.set()
         if self._reader_thread is not None:
             self._reader_thread.join(timeout=0.5)
@@ -958,6 +985,7 @@ class TerminalDisplay(Widget):
             self._poll_timer = None
 
     def resume_polling(self) -> None:
+        _dbg("resume_polling")
         if self._poll_timer is None and self._pty_running:
             # Restart reader thread.
             if self._reader_thread is None and self._master_fd is not None:
