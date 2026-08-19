@@ -150,7 +150,8 @@ class SSHManager:
         else:
             quoted = shlex.quote(path)
         cmd = self._ssh_prefix(name) + [
-            f"ls -1F {quoted} 2>/dev/null",
+            # -L dereferences symlinks so symlinked dirs show as dirs.
+            f"ls -1FL {quoted} 2>/dev/null",
         ]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)

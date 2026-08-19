@@ -41,23 +41,19 @@ class RemoteKernel:
         self._venv_cmd = venv_cmd
         self._pythonpath = pythonpath
         self._kc: BlockingKernelClient | None = None
-        self._tunnel_proc: subprocess.Popen | None = None
-        self._kernel_proc: subprocess.Popen | None = None
+        self._forward_cmd: list[str] | None = None
         self._conn_info: dict = {}
 
     @property
     def alive(self) -> bool:
         if self._kc is None:
             return False
-        # Check kernel process is still running, not a network heartbeat.
-        if self._kernel_proc and self._kernel_proc.poll() is not None:
-            return False
-        return True
+        # Detached kernel: ask jupyter_client (heartbeat-based).
+        return bool(self._kc.is_alive())
 
     def start(self, timeout: int = 30) -> None:
         # Start remote kernel, read connection file, set up tunnels.
         self._launch_remote_kernel()
-        self._read_connection_file()
         self._start_tunnels()
         self._connect_client(timeout)
         # Set matplotlib to Agg so plots go to PNG buffers.
@@ -74,26 +70,56 @@ class RemoteKernel:
                 break
 
     def _launch_remote_kernel(self) -> None:
-        # SSH exec that starts ipykernel on remote. Blocks (kernel runs).
+        # One short SSH session: start detached kernel, wait for conn file.
+        # Detached = no held mux session for kernel lifetime (MaxSessions).
         parts = [self._venv_cmd] if self._venv_cmd else []
         # PS1 bypasses .bashrc non-interactive guard so conda functions load.
         prefix = ("PS1='$ ' " + " && ".join(parts) + " && ") if parts else ""
-        self._conn_file = f"/tmp/jhtui-kernel-{int(time.time() * 1000)}.json"
-        self._stderr_file = f"/tmp/jhtui-kernel-stderr-{int(time.time() * 1000)}.log"
+        ts = int(time.time() * 1000)
+        self._conn_file = f"/tmp/jhtui-kernel-{ts}.json"
+        self._stderr_file = f"/tmp/jhtui-kernel-stderr-{ts}.log"
         env_prefix = f"PYTHONPATH={self._pythonpath} " if self._pythonpath else ""
         launcher = (
             prefix
             + env_prefix
-            + f"python -m ipykernel_launcher --ip=127.0.0.1 -f {self._conn_file}"
-            + f" 2>{self._stderr_file}"
+            + f"nohup python -m ipykernel_launcher --ip=127.0.0.1 -f {self._conn_file}"
+            + f" >{self._stderr_file} 2>&1 &"
+            + f" kernel_pid=$!;"
+            + f" for i in $(seq 1 60); do"
+            + f"   [ -s {self._conn_file} ] && break;"
+            + f"   kill -0 $kernel_pid 2>/dev/null || {{ echo KERNEL_DIED; cat {self._stderr_file}; exit 1; }};"
+            + f"   sleep 0.5;"
+            + f" done;"
+            + f" [ -s {self._conn_file} ] || {{ echo KERNEL_DIED; cat {self._stderr_file}; exit 1; }};"
+            + f" cat {self._conn_file}"
         )
         cmd = self._ssh_cmd() + [launcher]
-        self._kernel_proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=45
+            )
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError("kernel launch timed out") from e
+        if result.returncode != 0 or "KERNEL_DIED" in result.stdout:
+            raise RuntimeError(
+                f"kernel launch failed (code {result.returncode})"
+                f"\n{result.stdout}{result.stderr}"
+            )
+        try:
+            # Brace-find: conda/venv activation noise may precede the JSON.
+            start = result.stdout.find("{")
+            end = result.stdout.rfind("}")
+            if start < 0 or end <= start:
+                raise ValueError("no JSON object in output")
+            self._conn_info = json.loads(result.stdout[start : end + 1])
+        except (json.JSONDecodeError, ValueError) as e:
+            raise RuntimeError(
+                f"bad connection file:\n{result.stdout[:500]}"
+            ) from e
+
+    def _read_connection_file(self, retries: int = 40) -> None:
+        # Kept for shutdown-restart parity; start() no longer calls it.
+        raise RuntimeError("connection file already read at launch")
 
     def _ssh_cmd(self) -> list[str]:
         # Reuse the interactive terminal's ControlMaster socket.
@@ -108,40 +134,9 @@ class RemoteKernel:
         except Exception:
             return ""
 
-    def _read_connection_file(self, retries: int = 40) -> None:
-        import time as _time
-        for attempt in range(retries):
-            # Fail fast if kernel process died.
-            if self._kernel_proc and self._kernel_proc.poll() is not None:
-                err = self._read_remote_stderr()
-                raise RuntimeError(
-                    f"kernel exited (code {self._kernel_proc.returncode})"
-                    f"\nremote stderr: {err}"
-                )
-            # Brief SSH: open, cat, close. Does not hold a mux session long.
-            cmd = self._ssh_cmd() + [f"cat {self._conn_file} 2>/dev/null"]
-            try:
-                result = subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=5
-                )
-            except subprocess.TimeoutExpired:
-                _time.sleep(0.5)
-                continue
-            if result.returncode == 0 and result.stdout.strip():
-                try:
-                    self._conn_info = json.loads(result.stdout)
-                    return
-                except json.JSONDecodeError:
-                    pass
-            _time.sleep(0.5)
-        err = self._read_remote_stderr()
-        raise RuntimeError(
-            f"connection file not ready after {retries} retries: {self._conn_file}"
-            f"\nremote stderr: {err}"
-        )
-
     def _start_tunnels(self) -> None:
-        # Forward each ZMQ port via a single SSH -L multiplexed connection.
+        # Add -L forwards to the running interactive master via -O forward.
+        # Zero extra SSH connections; the master already exists.
         ports = [
             self._conn_info["shell_port"],
             self._conn_info["iopub_port"],
@@ -151,28 +146,34 @@ class RemoteKernel:
         ]
         node = self._ssh.nodes[self._node]
         cp = self._ssh._control_path(self._node)
-        cmd = ["ssh",
-            "-o", "ControlMaster=auto",
-            "-o", f"ControlPath={cp}",
-            "-o", "ControlPersist=120",
-            "-N",
-        ]
+        cmd = ["ssh", "-o", f"ControlPath={cp}"]
         for p in ports:
             cmd += ["-L", f"{p}:127.0.0.1:{p}"]
         if node.proxy and node.proxy in self._ssh.nodes:
             proxy = self._ssh.nodes[node.proxy]
             cmd += ["-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}"]
-        cmd += ["-p", str(node.port), f"{node.user}@{node.host}"]
-        self._tunnel_proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        # Wait for tunnels to establish.
-        time.sleep(1.0)
-        if self._tunnel_proc.poll() is not None:
-            raise RuntimeError("SSH tunnel process exited immediately")
+        cmd += ["-O", "forward", "-p", str(node.port), f"{node.user}@{node.host}"]
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=10
+            )
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError("tunnel setup timed out") from e
+        if result.returncode != 0:
+            raise RuntimeError(f"tunnel setup failed: {result.stderr.strip()}")
+        self._forward_cmd = cmd
+
+    def _stop_tunnels(self) -> None:
+        # Remove the forwards with -O cancel (master stays up).
+        if self._forward_cmd is None:
+            return
+        cancel = self._forward_cmd[:]
+        cancel[cancel.index("forward")] = "cancel"
+        try:
+            subprocess.run(cancel, capture_output=True, timeout=10)
+        except Exception:
+            pass
+        self._forward_cmd = None
 
     def _connect_client(self, timeout: int) -> None:
         kc = BlockingKernelClient()
@@ -270,23 +271,27 @@ class RemoteKernel:
                 pass
             self._kc.stop_channels()
             self._kc = None
-        if self._tunnel_proc is not None:
-            self._tunnel_proc.terminate()
-            self._tunnel_proc.wait(timeout=5)
-            self._tunnel_proc = None
-        if self._kernel_proc is not None:
-            self._kernel_proc.terminate()
-            self._kernel_proc.wait(timeout=5)
-            self._kernel_proc = None
+        self._stop_tunnels()
+        # Detached kernel: clean remote pid + files via one short session.
+        if self._conn_file:
+            try:
+                subprocess.run(
+                    self._ssh_cmd()
+                    + [f"rm -f {self._conn_file} {self._stderr_file}"],
+                    capture_output=True, timeout=10,
+                )
+            except Exception:
+                pass
 
 
 def _self_check() -> None:
     # Verify class structure without a real SSH connection.
     rk = RemoteKernel.__new__(RemoteKernel)
     rk._kc = None
-    rk._tunnel_proc = None
-    rk._kernel_proc = None
+    rk._forward_cmd = None
     rk._conn_info = {}
+    rk._conn_file = ""
+    rk._stderr_file = ""
     assert not rk.alive, "alive should be False with no kernel"
     assert RemoteKernel.execute.__name__ == "execute"
     assert CellResult().images == []
