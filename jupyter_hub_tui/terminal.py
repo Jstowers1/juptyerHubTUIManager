@@ -24,6 +24,7 @@ from .apc import APCStream
 
 def _dbg(msg: str) -> None:
     # Env-gated key-path tracer. JHTUI_DEBUG_KEYS=1 enables.
+    # Passive observation only; never changes behavior.
     import os as _os
     import time as _time
     if _os.environ.get("JHTUI_DEBUG_KEYS"):
@@ -742,11 +743,6 @@ class TerminalDisplay(Widget):
         self._reader_thread: Optional[threading.Thread] = None
         self._reader_stop = threading.Event()
         self._grid_lock = threading.Lock()
-        # Key writer thread. on_key enqueues bytes, writer thread
-        # does os.write with retries. Event loop never blocks on PTY I/O.
-        self._key_queue: _queue.Queue = _queue.Queue()
-        self._writer_thread: Optional[threading.Thread] = None
-        self._writer_stop = threading.Event()
 
     @property
     def pty_active(self) -> bool:
@@ -759,8 +755,7 @@ class TerminalDisplay(Widget):
                 event.stop()
                 self.app.call_later(self.app.run_action, ESCAPE_HATCH_KEYS[event.key])
                 return
-            _dbg(f"on_key key={event.key!r} char={event.character!r} "
-                 f"focused={self.has_focus} qsize={self._key_queue.qsize()}")
+            _dbg(f"on_key key={event.key!r} char={event.character!r} focused={self.has_focus}")
             self.send_key(event.key, event.character)
             event.stop()
         elif self._pending_start:
@@ -811,12 +806,6 @@ class TerminalDisplay(Widget):
             )
             self._reader_thread.start()
             self._poll_timer = self.set_interval(0.016, self._drain_queue)
-            # Start writer thread for non-blocking key writes.
-            self._writer_stop.clear()
-            self._writer_thread = threading.Thread(
-                target=self._writer_loop, daemon=True
-            )
-            self._writer_thread.start()
 
     def _reader_loop(self) -> None:
         # Background thread: reads PTY, parses ANSI, renders rows.
@@ -876,46 +865,27 @@ class TerminalDisplay(Widget):
                 pass
 
     def send_key(self, key: str, char: str | None) -> None:
-        # MUST only enqueue and return. Never block the event loop.
-        # The writer thread does os.write with EAGAIN retries.
+        # MUST only os.write and return. No refresh() here.
         data = key_to_bytes(key, char)
         if not data or self._master_fd is None or not self._pty_running:
-            _dbg(f"send_key DROP key={key!r} data={data!r} "
-                 f"fd={'set' if self._master_fd is not None else 'None'} "
-                 f"running={self._pty_running}")
+            _dbg(f"send_key DROP key={key!r} data={data!r} running={self._pty_running}")
             return
-        self._key_queue.put(data)
-        _dbg(f"send_key ENQ key={key!r} bytes={data!r} qsize={self._key_queue.qsize()}")
-
-    def _writer_loop(self) -> None:
-        # Background thread: drains key queue, writes to PTY with retries.
-        # Blocks on select.select here, never on the event loop.
         fd = self._master_fd
-        if fd is None:
-            return
-        while not self._writer_stop.is_set():
+        for attempt in range(5):
             try:
-                data = self._key_queue.get(timeout=0.1)
-            except _queue.Empty:
-                continue
-            wrote = False
-            for attempt in range(5):
+                os.write(fd, data)
+                _dbg(f"send_key WROTE key={key!r} bytes={data!r} attempt={attempt}")
+                return
+            except OSError as e:
+                if e.errno != errno.EAGAIN:
+                    _dbg(f"send_key ERR key={key!r} errno={e.errno}")
+                    return
+                _dbg(f"send_key EAGAIN key={key!r} attempt={attempt}")
+                # Buffer full. Wait for write-readiness, not a zero-delay spin.
                 try:
-                    os.write(fd, data)
-                    wrote = True
-                    _dbg(f"writer WROTE bytes={data!r} attempt={attempt}")
-                    break
-                except OSError as e:
-                    if e.errno != errno.EAGAIN:
-                        _dbg(f"writer ERR bytes={data!r} errno={e.errno}")
-                        break
-                    _dbg(f"writer EAGAIN bytes={data!r} attempt={attempt}")
-                    try:
-                        select.select([], [fd], [], 0.01)
-                    except (OSError, ValueError):
-                        break
-            if not wrote:
-                _dbg(f"writer DROP bytes={data!r} after 5 attempts")
+                    select.select([], [fd], [], 0.01)
+                except (OSError, ValueError):
+                    return
 
     def _drain_queue(self) -> None:
         if not self._pty_running:
@@ -964,17 +934,8 @@ class TerminalDisplay(Widget):
 
     # Timer drains queue at 60fps. Pause/resume controls visibility.
     def pause_polling(self) -> None:
-        # Stop the reader thread to prevent GIL contention.
-        # When hidden behind a notebook tab, the reader burns CPU
-        # parsing ANSI and rendering rows that nobody sees,
-        # stealing GIL time from the event loop and swallowing keys.
-        _dbg("pause_polling")
-        self._reader_stop.set()
-        if self._reader_thread is not None:
-            self._reader_thread.join(timeout=0.5)
-            self._reader_thread = None
-        self._reader_stop.clear()
         # Drain stale items so resume does not replay an old backlog.
+        _dbg("pause_polling")
         while True:
             try:
                 self._read_queue.get_nowait()
@@ -987,13 +948,6 @@ class TerminalDisplay(Widget):
     def resume_polling(self) -> None:
         _dbg("resume_polling")
         if self._poll_timer is None and self._pty_running:
-            # Restart reader thread.
-            if self._reader_thread is None and self._master_fd is not None:
-                self._reader_stop.clear()
-                self._reader_thread = threading.Thread(
-                    target=self._reader_loop, daemon=True
-                )
-                self._reader_thread.start()
             self._poll_timer = self.set_interval(0.016, self._drain_queue)
 
     def _handle_exit(self, status: int = 0) -> None:
@@ -1003,7 +957,6 @@ class TerminalDisplay(Widget):
         self.can_focus = False
         self.pause_polling()
         self._reader_stop.set()
-        self._writer_stop.set()
         if self._pid is not None:
             try:
                 os.waitpid(self._pid, 0)

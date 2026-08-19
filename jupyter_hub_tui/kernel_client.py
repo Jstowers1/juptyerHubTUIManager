@@ -140,8 +140,7 @@ class RemoteKernel:
         )
 
     def _start_tunnels(self) -> None:
-        # Forward ZMQ ports via a dedicated SSH connection.
-        # Separate ControlPath isolates kernel traffic from interactive keys.
+        # Forward each ZMQ port via a single SSH -L multiplexed connection.
         ports = [
             self._conn_info["shell_port"],
             self._conn_info["iopub_port"],

@@ -48,8 +48,6 @@ async def run_case(name: str, n_cells: int, delay_between: float) -> str:
                 break
             await asyncio.sleep(0.05)
         assert term._pty_running, f"{name}: PTY did not start"
-        assert term._writer_thread is not None, f"{name}: writer thread not started"
-        assert term._writer_thread.is_alive()
 
         state = {"count": 0, "bytes": b""}
         real_write = os.write
