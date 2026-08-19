@@ -244,6 +244,29 @@ class SSHManager:
             return ""
         return result.stdout.strip()
 
+    def remote_git_diff_branch(self, name: str, path: str, branch: str) -> str:
+        # Files that differ between main and branch.
+        base = self.remote_git_main_branch(name, path)
+        cmd = self._ssh_prefix(name) + [
+            f"git -C {shlex.quote(path)} diff --stat {base}...{shlex.quote(branch)} 2>/dev/null",
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=10)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return ""
+        return result.stdout.strip()
+
+    def remote_git_main_branch(self, name: str, path: str) -> str:
+        # Detect main vs master, cache nothing: one cheap remote call.
+        cmd = self._ssh_prefix(name) + [
+            f"git -C {shlex.quote(path)} symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@'",
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=10)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return "main"
+        return result.stdout.strip() or "main"
+
     def remote_git_branches(self, name: str, path: str) -> list[str]:
         cmd = self._ssh_prefix(name) + [
             f"git -C {shlex.quote(path)} branch --format='%(refname:short)' 2>/dev/null",

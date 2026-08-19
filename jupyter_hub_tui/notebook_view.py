@@ -11,10 +11,10 @@ from dataclasses import dataclass, field
 import nbformat
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import VerticalScroll
+from textual.containers import Horizontal, VerticalScroll
 from textual.message import Message
 from textual.widget import Widget
-from textual.widgets import RichLog, Static, TextArea
+from textual.widgets import Button, Markdown, RichLog, Static, TextArea
 
 from .kernel_client import CellResult, RemoteKernel
 
@@ -98,19 +98,26 @@ class CellCard(Widget):
         self.cell = cell
         self.index = index
         self._editing = False
+        # Image zoom scale for this cell. 1.0 = fit container.
+        self._zoom = 1.0
 
     def compose(self) -> ComposeResult:
         yield Static(
             f"[{self.index}] {self.cell.cell_type}",
             classes="cell-type-badge",
         )
-        cls = "cell-source"
+        # Markdown cells render as rich Markdown, not raw source.
         if self.cell.cell_type == "markdown":
-            cls += " markdown"
-        yield Static(self.cell.source, classes=cls)
+            yield Markdown(self.cell.source, classes="cell-source markdown")
+        else:
+            yield Static(self.cell.source, classes="cell-source")
         output = Static("", classes="cell-output")
         yield output
-        yield VerticalScroll(classes="cell-images")
+        with VerticalScroll(classes="cell-images"):
+            with Horizontal(classes="img-controls"):
+                yield Button("-", id="zoom-out", variant="default")
+                yield Button("reset", id="zoom-reset", variant="default")
+                yield Button("+", id="zoom-in", variant="default")
 
     def on_mount(self) -> None:
         self._render_output()
@@ -119,7 +126,8 @@ class CellCard(Widget):
         if self._editing:
             return
         try:
-            src = self.query_one(".cell-source", Static)
+            # Works for both Static (code) and Markdown displays.
+            src = self.query_one(".cell-source")
         except Exception:
             return
         editor = TextArea(text=self.cell.source, classes="cell-editor")
@@ -137,10 +145,17 @@ class CellCard(Widget):
             return
         self.cell.source = editor.text
         editor.remove()
-        cls = "cell-source"
+        # Markdown re-renders after edit; code shows raw source.
         if self.cell.cell_type == "markdown":
-            cls += " markdown"
-        self.mount(Static(self.cell.source, classes=cls), before=".cell-output")
+            self.mount(
+                Markdown(self.cell.source, classes="cell-source markdown"),
+                before=".cell-output",
+            )
+        else:
+            self.mount(
+                Static(self.cell.source, classes="cell-source"),
+                before=".cell-output",
+            )
         self._editing = False
 
     def enter_edit_mode(self) -> None:
@@ -208,6 +223,55 @@ class CellCard(Widget):
         if r is not None:
             return r.images
         return []
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        # Mouse-only zoom controls under each image.
+        if event.button.id == "zoom-in":
+            self._zoom = min(4.0, self._zoom * 1.25)
+            self.rerender_images()
+        elif event.button.id == "zoom-out":
+            self._zoom = max(0.25, self._zoom / 1.25)
+            self.rerender_images()
+        elif event.button.id == "zoom-reset":
+            self._zoom = 1.0
+            self.rerender_images()
+
+    def _clear_image_statics(self, container) -> None:
+        # Remove mounted image Statics, keep zoom buttons.
+        for child in list(container.children):
+            if isinstance(child, Static):
+                child.remove()
+
+    def rerender_images(self) -> None:
+        # Re-mount images at current zoom scale.
+        try:
+            container = self.query_one(".cell-images", VerticalScroll)
+        except Exception:
+            return
+        self._clear_image_statics(container)
+        images = self.get_images()
+        if not images:
+            container.remove_class("has-images")
+            return
+        container.add_class("has-images")
+        try:
+            from textual_image.renderable.tgp import Image as TGPRenderable
+            from PIL import Image as PILImage
+        except ImportError:
+            return
+        for img_bytes in images:
+            try:
+                pil_img = PILImage.open(io.BytesIO(img_bytes))
+                # TGP takes pixel ints, scales to fit, clamps to container.
+                w, h = pil_img.size
+                renderable = TGPRenderable(
+                    pil_img,
+                    width=int(w * self._zoom),
+                    height=int(h * self._zoom),
+                )
+                container.mount(Static(renderable, classes="img-display"))
+            except Exception:
+                pass
 
     @property
     def has_images(self) -> bool:
@@ -404,31 +468,8 @@ class NotebookView(Widget):
             self._focus_cell(self._active_cell + 1)
 
     async def _refresh_card_images(self, card: CellCard) -> None:
-        images = card.get_images()
-        if not images:
-            return
-        try:
-            from textual_image.renderable.tgp import Image as TGPRenderable
-            from PIL import Image as PILImage
-        except ImportError:
-            return
-        try:
-            container = card.query_one(".cell-images", VerticalScroll)
-        except Exception:
-            return
-        for child in list(container.children):
-            child.remove()
-        # Use Static with TGP renderable, not TGPImage widget.
-        # TGPImage re-uploads image data every refresh, killing performance.
-        for img_bytes in images:
-            try:
-                pil_img = PILImage.open(io.BytesIO(img_bytes))
-                # auto/auto: scale to container, keep aspect ratio.
-                renderable = TGPRenderable(pil_img, width="auto", height="auto")
-                await container.mount(Static(renderable))
-            except Exception:
-                pass
-        container.add_class("has-images")
+        # Delegate to the card: it owns zoom state and buttons.
+        card.rerender_images()
 
     def action_save(self) -> None:
         self.run_worker(self._save_notebook, exclusive=True)

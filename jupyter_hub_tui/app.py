@@ -728,7 +728,7 @@ class QuitScreen(ModalScreen):
     def compose(self) -> ComposeResult:
         with Vertical(id="quit-dialog"):
             yield Static("Quit JupyterHub TUI?")
-            yield Static("[dim]y = quit, anything else cancels[/]")
+            yield Static("[dim]press y to exit, press esc/n to stay[/]")
 
     def action_quit_now(self) -> None:
         self.app.exit()
@@ -966,7 +966,19 @@ class GitBranchScreen(ModalScreen):
     #branch-dialog .git-section {
         color: $text-muted;
         text-style: bold;
+        margin-top: 2;
+    }
+    #branch-dialog #branch-list {
+        height: auto;
+        max-height: 12;
         margin-top: 1;
+    }
+    #branch-dialog #branch-diff {
+        height: auto;
+        max-height: 10;
+        margin-top: 1;
+        padding-top: 1;
+        border-top: solid $primary-darken-2;
     }
     #branch-dialog #git-status {
         height: auto;
@@ -989,10 +1001,28 @@ class GitBranchScreen(ModalScreen):
             yield Static("", id="git-log")
             yield Label("Branches", classes="git_section")
             yield ListView(id="branch-list")
+            yield Static("", id="branch-diff")
             yield Static("", id="git-output")
 
     def on_mount(self) -> None:
         self._refresh()
+
+    def on_list_view_highlighted(self, event) -> None:
+        # Diff preview: files that differ from the main branch.
+        if getattr(event, "list_view", None) is None or event.list_view.id != "branch-list":
+            return
+        item = event.item
+        if item is None or not getattr(item, "data", None):
+            self.query_one("#branch-diff", Static).update("")
+            return
+        branch = item.data
+        node = self._ssh.active.name
+        diff = self._ssh.remote_git_diff_branch(node, self._repo, branch)
+        if diff:
+            text = f"[dim]vs main:[/]\n{diff}"
+        else:
+            text = f"[dim]no differences vs main[/]"
+        self.query_one("#branch-diff", Static).update(text)
 
     def _refresh(self) -> None:
         node = self._ssh.active.name
@@ -1025,6 +1055,8 @@ class GitBranchScreen(ModalScreen):
             lv.append(item)
         if not branches:
             lv.append(ListItem(Label("[dim]No branches[/]")))
+        # Keep focus on the branch list after refresh.
+        lv.focus()
 
     def action_fetch(self) -> None:
         self.query_one("#git-output", Static).update("[yellow]Fetching...[/]")
