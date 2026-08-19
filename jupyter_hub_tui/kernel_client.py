@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import time
@@ -42,6 +43,7 @@ class RemoteKernel:
         self._pythonpath = pythonpath
         self._kc: BlockingKernelClient | None = None
         self._forward_cmd: list[str] | None = None
+        self._kernel_pid: int | None = None
         self._conn_info: dict = {}
 
     @property
@@ -82,7 +84,7 @@ class RemoteKernel:
         launcher = (
             prefix
             + env_prefix
-            + f"nohup python -m ipykernel_launcher --ip=127.0.0.1 -f {self._conn_file}"
+            + f" setsid nohup python -m ipykernel_launcher --ip=127.0.0.1 -f {self._conn_file}"
             + f" >{self._stderr_file} 2>&1 &"
             + f" kernel_pid=$!;"
             + f" for i in $(seq 1 60); do"
@@ -91,6 +93,7 @@ class RemoteKernel:
             + f"   sleep 0.5;"
             + f" done;"
             + f" [ -s {self._conn_file} ] || {{ echo KERNEL_DIED; cat {self._stderr_file}; exit 1; }};"
+            + f" echo KERNEL_PID=$kernel_pid;"
             + f" cat {self._conn_file}"
         )
         cmd = self._ssh_cmd() + [launcher]
@@ -105,6 +108,11 @@ class RemoteKernel:
                 f"kernel launch failed (code {result.returncode})"
                 f"\n{result.stdout}{result.stderr}"
             )
+        # PID line precedes the JSON; venv noise may sit between.
+        m = re.search(r"^KERNEL_PID=(\d+)", result.stdout, re.M)
+        if not m:
+            raise RuntimeError(f"no KERNEL_PID in output:\n{result.stdout[:500]}")
+        self._kernel_pid = int(m.group(1))
         try:
             # Brace-find: conda/venv activation noise may precede the JSON.
             start = result.stdout.find("{")
@@ -183,12 +191,28 @@ class RemoteKernel:
             kc.wait_for_ready(timeout=timeout)
         except Exception as e:
             kc.stop_channels()
-            err = self._read_remote_stderr()
             raise RuntimeError(
                 f"kernel not ready: {e}"
-                + (f"\nremote stderr:\n{err}" if err else "\n(no remote stderr)")
+                + f"\n{self._diagnose_dead_kernel()}"
             ) from e
         self._kc = kc
+
+    def _diagnose_dead_kernel(self) -> str:
+        # One short SSH session: pid alive? stderr? Kill the orphan.
+        pid = self._kernel_pid
+        probe = f"kill -0 {pid} 2>/dev/null && echo ALIVE || echo DEAD"
+        parts = [probe]
+        if self._stderr_file:
+            parts.append(f"echo ---; tail -20 {self._stderr_file}")
+            parts.append(f"kill -9 {pid} 2>/dev/null")
+        try:
+            result = subprocess.run(
+                self._ssh_cmd() + ["; ".join(parts)],
+                capture_output=True, text=True, timeout=15,
+            )
+            return f"kernel pid {pid}: {result.stdout.strip()}"
+        except Exception:
+            return "(diagnosis failed)"
 
     def execute(self, code: str, timeout: int = 120) -> CellResult:
         # Execute code, collect all output until idle.
@@ -272,12 +296,13 @@ class RemoteKernel:
             self._kc.stop_channels()
             self._kc = None
         self._stop_tunnels()
-        # Detached kernel: clean remote pid + files via one short session.
+        # Detached kernel: kill pid, clean files via one short session.
         if self._conn_file:
+            kill = f"kill -9 {self._kernel_pid} 2>/dev/null; " if self._kernel_pid else ""
             try:
                 subprocess.run(
                     self._ssh_cmd()
-                    + [f"rm -f {self._conn_file} {self._stderr_file}"],
+                    + [kill + f"rm -f {self._conn_file} {self._stderr_file}"],
                     capture_output=True, timeout=10,
                 )
             except Exception:
@@ -289,6 +314,7 @@ def _self_check() -> None:
     rk = RemoteKernel.__new__(RemoteKernel)
     rk._kc = None
     rk._forward_cmd = None
+    rk._kernel_pid = None
     rk._conn_info = {}
     rk._conn_file = ""
     rk._stderr_file = ""
