@@ -84,8 +84,8 @@ class RemoteKernel:
         launcher = (
             prefix
             + env_prefix
-            + f" setsid nohup python -m ipykernel_launcher --ip=127.0.0.1 -f {self._conn_file}"
-            + f" >{self._stderr_file} 2>&1 &"
+            + f" nohup python -m ipykernel_launcher --ip=127.0.0.1 -f {self._conn_file}"
+            + f" < /dev/null >{self._stderr_file} 2>&1 &"
             + f" kernel_pid=$!;"
             + f" for i in $(seq 1 60); do"
             + f"   [ -s {self._conn_file} ] && break;"
