@@ -158,7 +158,7 @@ class JupyterHubTUI(App):
         Binding("ctrl+left", "prev_tab", "Prev Tab", show=False, priority=True),
         Binding("ctrl+right", "next_tab", "Next Tab", show=False, priority=True),
         Binding("ctrl+n", "disconnect", show=False),
-        Binding("escape", "quit"),
+        Binding("escape", "confirm_quit", show=False),
         Binding("tab", "cycle_focus", show=False),
         Binding("1", "quick_connect(0)", show=False),
         Binding("2", "quick_connect(1)", show=False),
@@ -492,6 +492,10 @@ class JupyterHubTUI(App):
         help_panel.display = not help_panel.display
         self._active_term()._resize_pty()
 
+    def action_confirm_quit(self) -> None:
+        # Escape must never kill the app directly; ask first.
+        self.push_screen(QuitScreen())
+
     def action_git_picker(self) -> None:
         if not self._ssh.active:
             self.notify("No active node.", severity="warning")
@@ -700,10 +704,46 @@ class JupyterHubTUI(App):
         self.notify("Node saved to config.json")
 
 
+class QuitScreen(ModalScreen):
+    # Escape confirmation. Yes exits, anything else cancels.
+
+    BINDINGS = [
+        Binding("escape", "app.pop_screen", "Cancel", show=False),
+        Binding("y", "quit_now", "Quit", show=False),
+    ]
+
+    DEFAULT_CSS = """
+    QuitScreen {
+        align: center middle;
+    }
+    #quit-dialog {
+        width: 44;
+        height: 5;
+        border: solid $primary;
+        background: $surface;
+        padding: 1 2;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="quit-dialog"):
+            yield Static("Quit JupyterHub TUI?")
+            yield Static("[dim]y = quit, anything else cancels[/]")
+
+    def action_quit_now(self) -> None:
+        self.app.exit()
+
+    def on_key(self, event) -> None:
+        # Any non-y key cancels. Swallow everything so it
+        # never leaks to the dashboard behind the modal.
+        if event.key != "y":
+            event.stop()
+            self.app.pop_screen()
+
+
 class NodeEditScreen(ModalScreen):
 
     BINDINGS = [Binding("escape", "app.pop_screen", "Cancel", show=False)]
-
     DEFAULT_CSS = """
     NodeEditScreen {
         align: center middle;

@@ -423,7 +423,8 @@ class NotebookView(Widget):
         for img_bytes in images:
             try:
                 pil_img = PILImage.open(io.BytesIO(img_bytes))
-                renderable = TGPRenderable(pil_img)
+                # auto/auto: scale to container, keep aspect ratio.
+                renderable = TGPRenderable(pil_img, width="auto", height="auto")
                 await container.mount(Static(renderable))
             except Exception:
                 pass
