@@ -90,6 +90,7 @@ class RemoteKernel:
         cmd = self._ssh_cmd() + [launcher]
         self._kernel_proc = subprocess.Popen(
             cmd,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -164,6 +165,7 @@ class RemoteKernel:
         cmd += ["-p", str(node.port), f"{node.user}@{node.host}"]
         self._tunnel_proc = subprocess.Popen(
             cmd,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
