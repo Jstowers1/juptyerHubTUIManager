@@ -12,10 +12,10 @@ import nbformat
 from rich.syntax import Syntax
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import VerticalScroll
 from textual.message import Message
 from textual.widget import Widget
-from textual.widgets import Button, Markdown, RichLog, Static, TextArea
+from textual.widgets import Markdown, RichLog, Static, TextArea
 
 from .kernel_client import CellResult, RemoteKernel
 
@@ -118,11 +118,7 @@ class CellCard(Widget):
             )
         output = Static("", classes="cell-output")
         yield output
-        with VerticalScroll(classes="cell-images"):
-            with Horizontal(classes="img-controls"):
-                yield Button("-", id="zoom-out", variant="default")
-                yield Button("reset", id="zoom-reset", variant="default")
-                yield Button("+", id="zoom-in", variant="default")
+        yield VerticalScroll(classes="cell-images")
 
     def on_mount(self) -> None:
         self._render_output()
@@ -135,7 +131,11 @@ class CellCard(Widget):
             src = self.query_one(".cell-source")
         except Exception:
             return
-        editor = TextArea(text=self.cell.source, classes="cell-editor")
+        editor = TextArea(
+            text=self.cell.source,
+            language=self._language if self.cell.cell_type == "code" else None,
+            classes="cell-editor",
+        )
         src.remove()
         self.mount(editor)
         self._editing = True
@@ -232,26 +232,14 @@ class CellCard(Widget):
             return r.images
         return []
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        # Mouse-only zoom controls under each image.
-        if event.button.id == "zoom-in":
-            self._zoom = min(4.0, self._zoom * 1.25)
-            self.rerender_images()
-        elif event.button.id == "zoom-out":
-            self._zoom = max(0.25, self._zoom / 1.25)
-            self.rerender_images()
-        elif event.button.id == "zoom-reset":
-            self._zoom = 1.0
-            self.rerender_images()
-
     def _clear_image_statics(self, container) -> None:
-        # Remove mounted image Statics, keep zoom buttons.
+        # Remove mounted image Statics.
         for child in list(container.children):
             if isinstance(child, Static):
                 child.remove()
 
     def rerender_images(self) -> None:
-        # Re-mount images at current zoom scale.
+        # Mount images with the halfcell renderer.
         try:
             container = self.query_one(".cell-images", VerticalScroll)
         except Exception:
@@ -263,32 +251,14 @@ class CellCard(Widget):
             return
         container.add_class("has-images")
         try:
-            from textual_image.renderable.tgp import Image as TGPRenderable
+            from textual_image.renderable.halfcell import Image as HalfcellRenderable
             from PIL import Image as PILImage
         except ImportError:
             return
         for img_bytes in images:
             try:
                 pil_img = PILImage.open(io.BytesIO(img_bytes))
-                w, h = pil_img.size
-                # TGP int width/height are CELLS. Fit to container cells,
-                # apply zoom, hard cap below the 297-diacritic limit.
-                try:
-                    from textual_image._terminal import get_cell_size
-
-                    cw, chh = get_cell_size() or (8, 16)
-                except Exception:
-                    cw, chh = 8, 16
-                img_cw = w / cw
-                img_ch = h / chh
-                fit = min(
-                    max(10, container.size.width - 2) / max(img_cw, 1),
-                    max(10, container.size.height - 2) / max(img_ch, 1),
-                    1.0,
-                )
-                cells_w = min(int(img_cw * fit * self._zoom), 290)
-                cells_h = min(int(img_ch * fit * self._zoom), 290)
-                renderable = TGPRenderable(pil_img, width=cells_w, height=cells_h)
+                renderable = HalfcellRenderable(pil_img, width="auto", height="auto")
                 container.mount(Static(renderable, classes="img-display"))
             except Exception:
                 pass

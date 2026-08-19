@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 from pathlib import Path
@@ -9,15 +10,16 @@ from pathlib import Path
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.events import Click
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Header, Static, ListView, ListItem, Label
 from textual.widgets import Input, Button, Tree, RichLog
 from textual.widgets import TabbedContent, TabPane
 
 from . import config as cfg
+from .notebook_view import CellCard, NotebookView
 from .ssh_manager import SSHManager
 from .terminal import TerminalDisplay
-from .notebook_view import NotebookView
 
 
 CSS = """
@@ -125,6 +127,42 @@ class FocusableLog(RichLog):
     def __init__(self, *args, **kwargs):
         kwargs.setdefault("markup", True)
         super().__init__(*args, **kwargs)
+
+
+def _download_fetch(ssh, node_name: str, remote_path: str) -> str:
+    # Pull a remote file/folder into ./downloads. Sync, run in a thread.
+    local_root = Path("downloads")
+    local_root.mkdir(exist_ok=True)
+
+    def walk(rpath: str, lpath: Path) -> list[str]:
+        got = []
+        try:
+            entries = ssh.list_remote_dir(node_name, rpath)
+        except Exception:
+            return got
+        for e in entries:
+            r = f"{rpath}/{e['name']}"
+            l = lpath / e["name"]
+            if e["is_dir"]:
+                l.mkdir(parents=True, exist_ok=True)
+                got.extend(walk(r, l))
+            else:
+                data = ssh.read_remote_file(node_name, r)
+                if data is not None:
+                    l.write_bytes(data)
+                    got.append(str(l))
+        return got
+
+    target = Path(remote_path.lstrip("/"))
+    if target.suffix or "." in target.name:
+        data = ssh.read_remote_file(node_name, remote_path)
+        if data is None:
+            return "download failed"
+        (local_root / target.name).write_bytes(data)
+        return f"saved downloads/{target.name}"
+    (local_root / target.name).mkdir(parents=True, exist_ok=True)
+    got = walk(remote_path, local_root / target.name)
+    return f"saved {len(got)} files to downloads/{target.name}"
 
 
 class JupyterHubTUI(App):
@@ -639,6 +677,67 @@ class JupyterHubTUI(App):
         node_name = root.data["node"]
         full_path = root.data["path"] + "/" + "/".join(labels)
         self._open_notebook(node_name, full_path)
+
+    async def on_click(self, event: Click) -> None:
+        # Right-click: file tree node or notebook image -> downloads/.
+        if event.button != 3:
+            return
+        w = event.widget
+        if w is not None and "img-display" in getattr(w, "classes", set()):
+            event.stop()
+            self._save_clicked_image(w)
+            return
+        hit = self._tree_node_path(event)
+        if hit is None:
+            return
+        node_name, remote_path = hit
+        event.stop()
+        self.notify(f"downloading {remote_path.rsplit('/', 1)[-1]}...")
+        await self._download_remote(node_name, remote_path)
+
+    def _save_clicked_image(self, img_widget) -> None:
+        # Save the right-clicked cell image into downloads/.
+        card = img_widget.ancestors.with_type(CellCard)
+        idx = list(card.query(".img-display")).index(img_widget)
+        data = card.get_images()[idx]
+        target = Path("downloads")
+        target.mkdir(exist_ok=True)
+        n = 1
+        out = target / f"image-{n}.png"
+        while out.exists():
+            n += 1
+            out = target / f"image-{n}.png"
+        out.write_bytes(data)
+        self.notify(f"saved {out}")
+
+    def _tree_node_path(self, event: Click) -> tuple[str, str] | None:
+        # Resolve a right-clicked file-tree node to (node, remote_path).
+        tree = event.control
+        if not isinstance(tree, Tree) or tree.id != "file-tree":
+            return None
+        n = tree._get_node(event.y)
+        if n is None or n is tree.root or not tree.root.data:
+            return None
+        labels = []
+        cur = n
+        while cur is not None and cur is not tree.root:
+            labels.append(str(cur.label))
+            cur = cur.parent
+        labels.reverse()
+        return (
+            tree.root.data["node"],
+            tree.root.data["path"] + "/" + "/".join(labels),
+        )
+
+    async def _download_remote(self, node_name: str, remote_path: str) -> None:
+        # Pull a file or whole folder into ./downloads off the UI thread.
+        try:
+            msg = await asyncio.to_thread(
+                _download_fetch, self._ssh, node_name, remote_path
+            )
+            self.notify(msg)
+        except Exception as e:
+            self.notify(f"download failed: {e}", severity="error")
 
     def _open_notebook(self, node_name: str, notebook_path: str) -> None:
         if not self._ssh.active:
