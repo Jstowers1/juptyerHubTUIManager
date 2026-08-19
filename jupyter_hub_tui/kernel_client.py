@@ -82,17 +82,17 @@ class RemoteKernel:
         self._stderr_file = f"/tmp/jhtui-kernel-stderr-{ts}.log"
         env_prefix = f"PYTHONPATH={self._pythonpath} " if self._pythonpath else ""
         launcher = (
-            prefix
-            + env_prefix
-            + f" nohup python -m ipykernel_launcher --ip=127.0.0.1 -f {self._conn_file}"
-            + f" < /dev/null >{self._stderr_file} 2>&1 &"
+            # Parenthesize: exec makes the subshell BECOME python, so $!
+            # is the real kernel pid. All activate errors land in EF.
+            f"( {prefix}{env_prefix}exec nohup python -m ipykernel_launcher --ip=127.0.0.1 -f {self._conn_file} )"
+            f" < /dev/null >{self._stderr_file} 2>&1 &"
             + f" kernel_pid=$!;"
-            + f" for i in $(seq 1 60); do"
+            + f" for i in $(seq 1 140); do"
             + f"   [ -s {self._conn_file} ] && break;"
             + f"   kill -0 $kernel_pid 2>/dev/null || {{ echo KERNEL_DIED; cat {self._stderr_file}; exit 1; }};"
             + f"   sleep 0.5;"
             + f" done;"
-            + f" [ -s {self._conn_file} ] || {{ echo KERNEL_DIED; cat {self._stderr_file}; exit 1; }};"
+            + f" [ -s {self._conn_file} ] || {{ echo KERNEL_TIMEOUT; cat {self._stderr_file}; exit 1; }};"
             + f" echo KERNEL_PID=$kernel_pid;"
             + f" cat {self._conn_file}"
         )
