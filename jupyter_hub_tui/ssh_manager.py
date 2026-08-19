@@ -267,6 +267,18 @@ class SSHManager:
             return "main"
         return result.stdout.strip() or "main"
 
+    def remote_git_current_branch(self, name: str, path: str) -> str:
+        cmd = self._ssh_prefix(name) + [
+            f"git -C {shlex.quote(path)} rev-parse --abbrev-ref HEAD 2>/dev/null",
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=10)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return ""
+        if result.returncode != 0:
+            return ""
+        return result.stdout.strip()
+
     def remote_git_branches(self, name: str, path: str) -> list[str]:
         cmd = self._ssh_prefix(name) + [
             f"git -C {shlex.quote(path)} branch --format='%(refname:short)' 2>/dev/null",

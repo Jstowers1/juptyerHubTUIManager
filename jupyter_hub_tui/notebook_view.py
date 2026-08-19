@@ -9,6 +9,7 @@ import json
 from dataclasses import dataclass, field
 
 import nbformat
+from rich.syntax import Syntax
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
@@ -93,11 +94,12 @@ class CellCard(Widget):
     }
     """
 
-    def __init__(self, cell: CellState, index: int) -> None:
+    def __init__(self, cell: CellState, index: int, language: str = "python") -> None:
         super().__init__()
         self.cell = cell
         self.index = index
         self._editing = False
+        self._language = language
         # Image zoom scale for this cell. 1.0 = fit container.
         self._zoom = 1.0
 
@@ -110,7 +112,10 @@ class CellCard(Widget):
         if self.cell.cell_type == "markdown":
             yield Markdown(self.cell.source, classes="cell-source markdown")
         else:
-            yield Static(self.cell.source, classes="cell-source")
+            yield Static(
+                Syntax(self.cell.source, self._language, theme="ansi_dark"),
+                classes="cell-source",
+            )
         output = Static("", classes="cell-output")
         yield output
         with VerticalScroll(classes="cell-images"):
@@ -145,7 +150,7 @@ class CellCard(Widget):
             return
         self.cell.source = editor.text
         editor.remove()
-        # Markdown re-renders after edit; code shows raw source.
+        # Markdown re-renders after edit; code re-highlight.
         if self.cell.cell_type == "markdown":
             self.mount(
                 Markdown(self.cell.source, classes="cell-source markdown"),
@@ -153,7 +158,10 @@ class CellCard(Widget):
             )
         else:
             self.mount(
-                Static(self.cell.source, classes="cell-source"),
+                Static(
+                    Syntax(self.cell.source, self._language, theme="ansi_dark"),
+                    classes="cell-source",
+                ),
                 before=".cell-output",
             )
         self._editing = False
@@ -262,13 +270,25 @@ class CellCard(Widget):
         for img_bytes in images:
             try:
                 pil_img = PILImage.open(io.BytesIO(img_bytes))
-                # TGP takes pixel ints, scales to fit, clamps to container.
                 w, h = pil_img.size
-                renderable = TGPRenderable(
-                    pil_img,
-                    width=int(w * self._zoom),
-                    height=int(h * self._zoom),
+                # TGP int width/height are CELLS. Fit to container cells,
+                # apply zoom, hard cap below the 297-diacritic limit.
+                try:
+                    from textual_image._terminal import get_cell_size
+
+                    cw, chh = get_cell_size() or (8, 16)
+                except Exception:
+                    cw, chh = 8, 16
+                img_cw = w / cw
+                img_ch = h / chh
+                fit = min(
+                    max(10, container.size.width - 2) / max(img_cw, 1),
+                    max(10, container.size.height - 2) / max(img_ch, 1),
+                    1.0,
                 )
+                cells_w = min(int(img_cw * fit * self._zoom), 290)
+                cells_h = min(int(img_ch * fit * self._zoom), 290)
+                renderable = TGPRenderable(pil_img, width=cells_w, height=cells_h)
                 container.mount(Static(renderable, classes="img-display"))
             except Exception:
                 pass
@@ -363,6 +383,7 @@ class NotebookView(Widget):
             status.write(f"[red]Failed to load notebook: {err}[/]")
             return
         nb = nbformat.reads(raw.decode(), as_version=4)
+        self._nb = nb
         self._cells = []
         for c in nb.cells:
             if c.cell_type not in ("code", "markdown"):
@@ -393,8 +414,17 @@ class NotebookView(Widget):
     async def _render_cells(self) -> None:
         scroll = self.query_one("#nb-scroll", VerticalScroll)
         scroll.remove_children()
+        # Kernel language from metadata, python fallback.
+        lang = "python"
+        try:
+            lang = nb.metadata["language_info"]["name"]
+        except (AttributeError, KeyError, TypeError):
+            pass
         # Batch mount: one layout pass instead of N.
-        cards = [CellCard(cell, i) for i, cell in enumerate(self._cells)]
+        cards = [
+            CellCard(cell, i, language=lang)
+            for i, cell in enumerate(self._cells)
+        ]
         if cards:
             await scroll.mount_all(cards)
         if self._cells:

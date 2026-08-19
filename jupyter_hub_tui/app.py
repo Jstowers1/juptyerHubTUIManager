@@ -718,7 +718,7 @@ class QuitScreen(ModalScreen):
     }
     #quit-dialog {
         width: 44;
-        height: 5;
+        height: auto;
         border: solid $primary;
         background: $surface;
         padding: 1 2;
@@ -1002,6 +1002,10 @@ class GitBranchScreen(ModalScreen):
             yield Label("Branches", classes="git_section")
             yield ListView(id="branch-list")
             yield Static("", id="branch-diff")
+            yield Static(
+                "[dim]f=fetch  p=pull  enter=checkout  esc=close[/]",
+                id="branch-hints",
+            )
             yield Static("", id="git-output")
 
     def on_mount(self) -> None:
@@ -1045,13 +1049,13 @@ class GitBranchScreen(ModalScreen):
         self.query_one("#git-log", Static).update(log or "[dim]No commits[/]")
         # Branches
         branches = self._ssh.remote_git_branches(node, self._repo)
+        current = self._ssh.remote_git_current_branch(node, self._repo)
         lv = self.query_one("#branch-list", ListView)
         lv.clear()
         for b in branches:
-            prefix = "[green]*[/] " if b.startswith("*") else "   "
-            clean = b.lstrip("*").strip()
-            item = ListItem(Label(f"{prefix}{clean}"))
-            item.data = clean
+            marker = "[green]*[/] " if b == current else "  "
+            item = ListItem(Label(f"{marker}{b}"))
+            item.data = b
             lv.append(item)
         if not branches:
             lv.append(ListItem(Label("[dim]No branches[/]")))
