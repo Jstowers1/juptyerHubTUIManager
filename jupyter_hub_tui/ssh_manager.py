@@ -131,7 +131,7 @@ class SSHManager:
             cmd += ["-o", f"ProxyJump={proxy.user}@{proxy.host}:{proxy.port}"]
         cmd += ["-O", "check", f"{node.user}@{node.host}"]
         try:
-            r = subprocess.run(cmd, capture_output=True, timeout=5)
+            r = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, timeout=5)
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return
         if r.returncode != 0:
@@ -149,7 +149,7 @@ class SSHManager:
         deadline = _time.monotonic() + timeout
         while _time.monotonic() < deadline:
             try:
-                r = subprocess.run(check, capture_output=True, timeout=5)
+                r = subprocess.run(check, capture_output=True, stdin=subprocess.DEVNULL, timeout=5)
                 if r.returncode == 0:
                     return True
             except subprocess.TimeoutExpired:
@@ -161,7 +161,7 @@ class SSHManager:
         self._ensure_socket(name)
         cmd = self._ssh_prefix(name) + ["echo ok"]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            result = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=5)
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return False
         return result.returncode == 0 and "ok" in result.stdout
@@ -178,7 +178,7 @@ class SSHManager:
             f"ls -1FL {quoted} 2>/dev/null",
         ]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            result = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=5)
         except subprocess.TimeoutExpired:
             return []
         entries = []
@@ -196,7 +196,7 @@ class SSHManager:
             f"git -C {shlex.quote(path)} status --porcelain=v1 -b 2>/dev/null",
         ]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=10)
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return None
         if result.returncode != 0:
@@ -209,7 +209,7 @@ class SSHManager:
             f"git -C {shlex.quote(path)} log --oneline -{count} 2>/dev/null",
         ]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=10)
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return ""
         return result.stdout.strip()
@@ -219,7 +219,7 @@ class SSHManager:
             f"git -C {shlex.quote(path)} fetch 2>&1",
         ]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=30)
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return False
         return result.returncode == 0
@@ -229,7 +229,7 @@ class SSHManager:
             f"git -C {shlex.quote(path)} pull 2>&1",
         ]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=30)
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return False, "timeout"
         return result.returncode == 0, result.stdout.strip()
@@ -239,7 +239,7 @@ class SSHManager:
             f"git -C {shlex.quote(path)} diff 2>/dev/null",
         ]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=10)
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return ""
         return result.stdout.strip()
@@ -249,7 +249,7 @@ class SSHManager:
             f"git -C {shlex.quote(path)} branch --format='%(refname:short)' 2>/dev/null",
         ]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=10)
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return []
         if result.returncode != 0:
@@ -261,7 +261,7 @@ class SSHManager:
             f"git -C {shlex.quote(path)} checkout {shlex.quote(branch)} 2>&1",
         ]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=10)
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return False, "timeout"
         return result.returncode == 0, result.stdout.strip()
@@ -280,7 +280,7 @@ class SSHManager:
             local_path,
         ]
         try:
-            result = subprocess.run(scp_args, capture_output=True, text=True, timeout=15)
+            result = subprocess.run(scp_args, capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=15)
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return False
         return result.returncode == 0
@@ -299,7 +299,7 @@ class SSHManager:
             f"{node.user}@{node.host}:{remote_path}",
         ]
         try:
-            result = subprocess.run(scp_args, capture_output=True, text=True, timeout=15)
+            result = subprocess.run(scp_args, capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=15)
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return False
         return result.returncode == 0
@@ -318,7 +318,7 @@ class SSHManager:
         cmd = self._ssh_prefix(name) + [f"cat {qpath}"]
         try:
             result = subprocess.run(
-                cmd, capture_output=True, timeout=15
+                cmd, capture_output=True, stdin=subprocess.DEVNULL, timeout=15
             )
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return None
@@ -335,7 +335,7 @@ class SSHManager:
         for attempt in range(3):
             try:
                 result = subprocess.run(
-                    cmd, input=data, capture_output=True, timeout=20
+                    cmd, input=data, capture_output=True, stdin=subprocess.DEVNULL, timeout=20
                 )
             except (subprocess.TimeoutExpired, FileNotFoundError):
                 # MaxSessions limit: wait for a slot then retry.

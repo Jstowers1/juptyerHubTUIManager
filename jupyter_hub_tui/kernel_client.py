@@ -99,7 +99,7 @@ class RemoteKernel:
         cmd = self._ssh_cmd() + [launcher]
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=90
+                cmd, capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=90
             )
         except subprocess.TimeoutExpired as e:
             partial = (e.stdout or "")[:500]
@@ -141,7 +141,7 @@ class RemoteKernel:
     def _read_remote_stderr(self) -> str:
         cmd = self._ssh_cmd() + [f"cat {self._stderr_file}"]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            result = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=5)
             return result.stdout if result.returncode == 0 else ""
         except Exception:
             return ""
@@ -167,7 +167,7 @@ class RemoteKernel:
         cmd += ["-O", "forward", "-p", str(node.port), f"{node.user}@{node.host}"]
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=10
+                cmd, capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=10
             )
         except subprocess.TimeoutExpired as e:
             raise RuntimeError("tunnel setup timed out") from e
@@ -188,7 +188,7 @@ class RemoteKernel:
         cancel = self._forward_cmd[:]
         cancel[cancel.index("forward")] = "cancel"
         try:
-            subprocess.run(cancel, capture_output=True, timeout=10)
+            subprocess.run(cancel, capture_output=True, stdin=subprocess.DEVNULL, timeout=10)
         except Exception:
             pass
         self._forward_cmd = None
@@ -218,7 +218,7 @@ class RemoteKernel:
         try:
             result = subprocess.run(
                 self._ssh_cmd() + ["; ".join(parts)],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=15,
             )
             return f"kernel pid {pid}: {result.stdout.strip()}"
         except Exception:
@@ -313,7 +313,7 @@ class RemoteKernel:
                 subprocess.run(
                     self._ssh_cmd()
                     + [kill + f"rm -f {self._conn_file} {self._stderr_file}"],
-                    capture_output=True, timeout=10,
+                    capture_output=True, stdin=subprocess.DEVNULL, timeout=10,
                 )
             except Exception:
                 pass

@@ -66,7 +66,7 @@ def _run_git(path: str, args: list[str]) -> str | None:
     try:
         result = subprocess.run(
             ["git", "-C", path, *args],
-            capture_output=True,
+            capture_output=True, stdin=subprocess.DEVNULL,
             text=True,
             timeout=5,
         )
