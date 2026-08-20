@@ -697,9 +697,13 @@ class JupyterHubTUI(App):
 
     def _save_clicked_image(self, img_widget) -> None:
         # Save the right-clicked cell image into downloads/.
-        card = img_widget.ancestors.with_type(CellCard)
-        idx = list(card.query(".img-display")).index(img_widget)
-        data = card.get_images()[idx]
+        p = img_widget.parent
+        while p is not None and not isinstance(p, CellCard):
+            p = p.parent
+        if p is None:
+            return
+        idx = list(p.query(".img-display")).index(img_widget)
+        data = p.get_images()[idx]
         target = Path("downloads")
         target.mkdir(exist_ok=True)
         n = 1

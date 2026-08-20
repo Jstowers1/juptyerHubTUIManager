@@ -251,14 +251,15 @@ class CellCard(Widget):
             return
         container.add_class("has-images")
         try:
-            from textual_image.renderable.halfcell import Image as HalfcellRenderable
+            from textual_image.renderable import Image as AutoImage
             from PIL import Image as PILImage
         except ImportError:
             return
         for img_bytes in images:
             try:
                 pil_img = PILImage.open(io.BytesIO(img_bytes))
-                renderable = HalfcellRenderable(pil_img, width="auto", height="auto")
+                # Auto: TGP on kitty, sixel where supported, else halfcell.
+                renderable = AutoImage(pil_img, width="auto", height="auto")
                 container.mount(Static(renderable, classes="img-display"))
             except Exception:
                 pass
