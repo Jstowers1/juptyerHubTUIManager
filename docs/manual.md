@@ -25,4 +25,12 @@ source ~/.venv/bin/activate
 ## Git
 
 The tracked repo lives on the remote system. Use Ctrl+G to set the path,
-Ctrl+B to view branches, Ctrl+O to checkout.
+Ctrl+B to view branches. Inside the git screen: f fetches, p pulls,
+Enter or c checks out the selected branch. The current branch is marked
+with a green *.
+
+## Downloads
+
+Right-click a file or folder in the sidebar tree to download it to the
+local ./downloads/ directory. Folders download recursively. Right-click
+a cell image to save the PNG.

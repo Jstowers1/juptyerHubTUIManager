@@ -8,10 +8,13 @@ git, venv, and notebook workflows. All operations happen over SSH.
 - SSH into cluster nodes from an embedded terminal
 - Browse remote files and open `.ipynb` notebooks in tabs
 - Run notebook cells on a remote IPython kernel
-- Display plot output as full-resolution images in the terminal (kitty)
+- Display plot output as full-resolution inline images (kitty graphics protocol)
+- Syntax-colored code cells in both display and edit modes (tree-sitter)
+- Right-click files, folders, or cell images to download to `./downloads/`
 - Remote git status, log, branches, fetch, pull, checkout
 - Proxy jump support for nodes behind a login node
 - SSH ControlMaster so all commands reuse one connection
+- Kernel starts in the background; cells render instantly on open
 
 ## Setup
 
@@ -25,23 +28,41 @@ git, venv, and notebook workflows. All operations happen over SSH.
 Run inside **kitty** for inline image rendering. Other terminals will work
 for everything except images.
 
+## What's new
+
+- Right-click downloads: files, folders (recursive), and cell images to
+  `./downloads/`.
+- Kernel starts in the background. Cells render and are editable while
+  it spins up; run requests queue and execute in order when ready.
+- Syntax-colored code cells in display and edit modes (tree-sitter,
+  monokai). Kernel language names like `ipython3` are normalized to
+  `python`.
+- Inline images sized in terminal cells to fit the card, full-resolution
+  bitmap via the kitty graphics protocol. No manual size controls.
+- Git screen: current branch marker, fetch/pull/checkout hints.
+- Escape shows a quit confirmation instead of exiting immediately.
+
 ## How notebooks work
 
 No euporie, no browser, no JupyterHub. The TUI talks to the kernel directly.
 
 1. Open a `.ipynb` file from the remote file browser.
-2. The file is read over SSH (`cat`) and parsed with `nbformat`.
-3. A remote IPython kernel starts on the cluster node via SSH.
+2. The file is read over SSH (`cat`) and parsed with `nbformat`. Cells render
+   immediately.
+3. A remote IPython kernel starts on the cluster node via SSH, in the
+   background. Cells are editable while it spins up.
 4. The kernel prints its connection file path. The TUI reads it over SSH.
 5. The TUI opens SSH port tunnels for all five ZMQ ports (shell, iopub,
    stdin, control, heartbeat) on a single SSH connection.
 6. The TUI connects to the kernel locally via `jupyter_client`.
 7. Run a cell with `Ctrl+E`. Code goes out over ZMQ, output comes back.
+   Runs requested while the kernel is still starting are queued and
+   executed in order once it is ready.
 8. Matplotlib output is forced to `Agg` backend so plots render to PNG
    buffers. PNG data comes back as base64 over iopub.
-9. The TUI decodes the PNG and renders it via `textual-image` TGPImage,
-   which uses the kitty graphics protocol to display full-resolution
-   images inline.
+9. The TUI decodes the PNG and renders it with `textual-image` TGPImage
+   sized in terminal cells to fit the card, which sends the full-res
+   bitmap via the kitty graphics protocol for sharp inline display.
 
 ### Architecture
 
@@ -106,7 +127,24 @@ This matters when your repo has modules that shadow installed packages
 | `Ctrl+R` | Run cell, move to next |
 | `Ctrl+S` | Save notebook to remote |
 | `Ctrl+I` | Interrupt kernel |
+| `Ctrl+K` / `Ctrl+J` | Move to previous / next cell |
 | `Ctrl+W` | Close tab (shuts down kernel) |
+
+Cell editing is always on: the focused cell is the editor. Move away with
+`Ctrl+K`/`Ctrl+J` to commit. Code is syntax colored in both display and
+edit modes (requires `tree-sitter` and `tree-sitter-python`).
+
+### Downloads
+
+Right-click (any mouse button-3 press):
+
+| Target | Result |
+|--------|--------|
+| File in sidebar tree | Saved to `./downloads/<name>` |
+| Folder in sidebar tree | Recursively downloaded to `./downloads/<name>/` |
+| Cell image | PNG saved to `./downloads/image-N.png` |
+
+Downloads run off the UI thread; the status line reports the result.
 
 ### Git screen (Ctrl+B)
 
@@ -116,6 +154,8 @@ This matters when your repo has modules that shadow installed packages
 | `p` | Pull |
 | `Enter` | Checkout selected branch |
 | `Esc` | Close |
+
+The current branch is marked with a green `*`.
 
 ## Config
 

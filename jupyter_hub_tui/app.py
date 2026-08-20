@@ -276,6 +276,22 @@ class JupyterHubTUI(App):
         hp.write("  Ctrl+S       Save notebook")
         hp.write("  Ctrl+I       Interrupt kernel")
         hp.write("")
+        hp.write("[cyan]Editing[/]")
+        hp.write("  Cells open in the editor on focus. Type to edit.")
+        hp.write("  Move cells with Ctrl+K / Ctrl+J to commit edits.")
+        hp.write("  Code is syntax colored (needs tree-sitter).")
+        hp.write("")
+        hp.write("[cyan]Downloads (right-click)[/]")
+        hp.write("  Right-click a file/folder in the sidebar tree")
+        hp.write("    -> downloads it to ./downloads/ (folders recursive)")
+        hp.write("  Right-click a cell image")
+        hp.write("    -> saves the PNG to ./downloads/")
+        hp.write("")
+        hp.write("[cyan]Kernel[/]")
+        hp.write("  Cells render and are editable while the kernel starts.")
+        hp.write("  Run requests during startup queue and run in order")
+        hp.write("  when the kernel is ready.")
+        hp.write("")
         hp.write("[cyan]Config[/]")
         hp.write("  Ctrl+E       Edit active node")
         hp.write("")
@@ -1106,7 +1122,7 @@ class GitBranchScreen(ModalScreen):
             yield ListView(id="branch-list")
             yield Static("", id="branch-diff")
             yield Static(
-                "[dim]f=fetch  p=pull  enter=checkout  esc=close[/]",
+                "[dim]f=fetch  p=pull  enter=checkout  c=checkout  esc=close  * =current branch[/]",
                 id="branch-hints",
             )
             yield Static("", id="git-output")
