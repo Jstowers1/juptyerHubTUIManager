@@ -143,7 +143,18 @@ class CellCard(Widget):
                 theme="monokai",
                 classes="cell-editor",
             )
-        except Exception:
+            # Textual silently drops highlighting without tree-sitter;
+            # surface it instead of guessing.
+            if lang is not None and editor._highlight_query is None:
+                self.app.notify(
+                    "Editor colors off: tree-sitter not installed",
+                    severity="warning",
+                )
+        except Exception as e:
+            # If tree-sitter is missing, still edit — but make it visible.
+            self.app.notify(
+                f"Editor fallback (no syntax): {e}", severity="warning"
+            )
             editor = TextArea(text=self.cell.source, classes="cell-editor")
         src.remove()
         self.mount(editor)
@@ -274,13 +285,19 @@ class CellCard(Widget):
             try:
                 pil_img = PILImage.open(io.BytesIO(img_bytes))
                 w, h = pil_img.size
-                fit = min(280 * cw / w, 280 * chh / h, 1.0)
-                if fit < 1.0:
-                    pil_img = pil_img.resize(
-                        (max(1, int(w * fit)), max(1, int(h * fit)))
-                    )
+                # Fit inline in cells; full-res bitmap, kitty scales.
+                avail_w = max(1, self.content_size.width - 2)
+                avail_h = max(1, self.screen.size.height - 6)
+                w_cells = w / cw
+                h_cells = h / chh
+                fit = min(avail_w / w_cells, avail_h / h_cells, 1.0)
+                size_w = max(1, min(280, int(w_cells * fit)))
+                size_h = max(1, min(280, int(h_cells * fit)))
                 container.mount(
-                    Static(TGPRenderable(pil_img), classes="img-display")
+                    Static(
+                        TGPRenderable(pil_img, width=size_w, height=size_h),
+                        classes="img-display",
+                    )
                 )
             except Exception:
                 pass
@@ -338,6 +355,7 @@ class NotebookView(Widget):
         self._cells: list[CellState] = []
         self._kernel: RemoteKernel | None = None
         self._active_cell = 0
+        self._run_queue: list[tuple[CellCard, bool]] = []
 
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="nb-scroll")
@@ -401,8 +419,8 @@ class NotebookView(Widget):
             status.write(f"[red]Kernel failed:[/]")
             status.write(str(e))
             return
-        status.write(f"[green]Kernel ready[/]  {len(self._cells)} cells")
         self.post_message(self.KernelStarted())
+        # Drain any queue via the handler above.
 
     async def _render_cells(self) -> None:
         scroll = self.query_one("#nb-scroll", VerticalScroll)
@@ -463,12 +481,39 @@ class NotebookView(Widget):
     def action_run_and_next(self) -> None:
         self.run_worker(self._run_cell(run_next=True), exclusive=True)
 
+    async def on_notebook_view_kernel_started(self) -> None:
+        # Kernel is ready: announce and drain the run queue.
+        status = self.query_one("#nb-status", RichLog)
+        if self._run_queue:
+            status.write(
+                f"[green]Kernel ready[/]  running {len(self._run_queue)} queued cell(s)..."
+            )
+            self.notify("Kernel ready — running queued cells")
+            queue = self._run_queue[:]
+            self._run_queue.clear()
+            for card, run_next in queue:
+                await self._execute_cell(card, run_next)
+        else:
+            status.write(f"[green]Kernel ready[/]  {len(self._cells)} cells")
+            self.notify("Kernel ready")
+
     async def _run_cell(self, run_next: bool = False) -> None:
         if self._kernel is None or not self._kernel.alive:
-            self.notify("Kernel not ready", severity="warning")
+            card = self._current_card()
+            if card is not None and card.cell.cell_type == "code":
+                self._run_queue.append((card, run_next))
+                status = self.query_one("#nb-status", RichLog)
+                status.write(
+                    f"[yellow]Cell {card.index} queued (kernel starting)[/]"
+                )
             return
         card = self._current_card()
         if card is None:
+            return
+        await self._execute_cell(card, run_next)
+
+    async def _execute_cell(self, card: CellCard, run_next: bool) -> None:
+        if self._kernel is None or not self._kernel.alive:
             return
         code = card.get_source()
         card.cell.source = code
