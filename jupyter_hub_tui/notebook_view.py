@@ -140,6 +140,7 @@ class CellCard(Widget):
             editor = TextArea(
                 text=self.cell.source,
                 language=lang,
+                theme="monokai",
                 classes="cell-editor",
             )
         except Exception:
@@ -265,27 +266,22 @@ class CellCard(Widget):
             return
         for img_bytes in images:
             try:
+                from textual_image._terminal import get_cell_size
+
+                cw, chh = get_cell_size() or (8, 16)
+            except Exception:
+                cw, chh = 8, 16
+            try:
                 pil_img = PILImage.open(io.BytesIO(img_bytes))
                 w, h = pil_img.size
-                # Explicit TGP: auto-detect fails under Textual (stdin owned).
-                # int width/height are CELLS, hard cap below 297-diacritic limit.
-                try:
-                    from textual_image._terminal import get_cell_size
-
-                    cw, chh = get_cell_size() or (8, 16)
-                except Exception:
-                    cw, chh = 8, 16
-                img_cw = w / cw
-                img_ch = h / chh
-                fit = min(
-                    max(10, container.size.width - 2) / max(img_cw, 1),
-                    max(10, container.size.height - 2) / max(img_ch, 1),
-                    1.0,
+                fit = min(280 * cw / w, 280 * chh / h, 1.0)
+                if fit < 1.0:
+                    pil_img = pil_img.resize(
+                        (max(1, int(w * fit)), max(1, int(h * fit)))
+                    )
+                container.mount(
+                    Static(TGPRenderable(pil_img), classes="img-display")
                 )
-                cells_w = min(int(img_cw * fit), 290)
-                cells_h = min(int(img_ch * fit), 290)
-                renderable = TGPRenderable(pil_img, width=cells_w, height=cells_h)
-                container.mount(Static(renderable, classes="img-display"))
             except Exception:
                 pass
 
@@ -417,8 +413,10 @@ class NotebookView(Widget):
             lang = self._nb.metadata["language_info"]["name"]
         except (AttributeError, KeyError, TypeError):
             pass
-        # Normalize kernel names: ipython3 -> python for tree-sitter/pygments.
+        # Normalize kernel names: ipython3/python3 -> python (tree-sitter).
         lang = lang.lower().replace("ipython", "python")
+        if lang.startswith("python"):
+            lang = "python"
         # Batch mount: one layout pass instead of N.
         cards = [
             CellCard(cell, i, language=lang)
