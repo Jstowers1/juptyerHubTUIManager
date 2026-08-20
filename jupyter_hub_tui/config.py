@@ -1,4 +1,4 @@
-# Load config from config.json, fall back to example template.
+#Load config from config.json and fall back to the example template.
 
 import json
 import os
@@ -47,14 +47,14 @@ def browse_path(data: dict[str, Any]) -> str:
 
 
 def save(data: dict[str, Any]) -> None:
-    # Write config to config.json. Strips internal keys first.
+    #Write config to config.json. Strip internal keys first.
     clean = {k: v for k, v in data.items() if not k.startswith("_")}
     with open(_CONFIG_FILE, "w") as f:
         json.dump(clean, f, indent=2)
 
 
 def update_node(data: dict[str, Any], name: str, **fields: Any) -> dict[str, Any]:
-    # Update a single node's fields in the data dict. Returns updated dict.
+    #Update one node in the data dict. Return the updated dict.
     if "nodes" not in data:
         data["nodes"] = {}
     if name not in data["nodes"]:
@@ -64,7 +64,7 @@ def update_node(data: dict[str, Any], name: str, **fields: Any) -> dict[str, Any
 
 
 def set_git_repo_path(data: dict[str, Any], path: str) -> dict[str, Any]:
-    # Set git repo path in the data dict. Returns updated dict.
+    #Set the git repo path in the data dict. Return the updated dict.
     if "git" not in data:
         data["git"] = {}
     data["git"]["repo_path"] = path

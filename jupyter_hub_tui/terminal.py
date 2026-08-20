@@ -1,5 +1,5 @@
-# Embedded terminal widget. Custom screen + ANSI parser, no pyte.
-# Runs SSH (or any command) in a PTY, renders via a minimal VT100 state machine.
+#Embedded terminal widget. Custom screen and ANSI parser, no pyte.
+#Run SSH or any command in a PTY and render it with a VT100 state machine.
 
 from __future__ import annotations
 
@@ -23,8 +23,8 @@ from .apc import APCStream
 
 
 def _dbg(msg: str) -> None:
-    # Env-gated key-path tracer. JHTUI_DEBUG_KEYS=1 enables.
-    # Passive observation only; never changes behavior.
+    #Env-gated key-path tracer. Set JHTUI_DEBUG_KEYS=1 to enable it.
+    #It only observes and never changes behavior.
     import os as _os
     import time as _time
     if _os.environ.get("JHTUI_DEBUG_KEYS"):
@@ -78,8 +78,8 @@ def key_to_bytes(key: str, char: str | None) -> bytes:
     return b""
 
 
-# Keys that escape the terminal during SSH.
-# Ctrl+t/left/right/backslash are priority app bindings, not here.
+#Keys that escape the terminal during SSH.
+#Ctrl+t and arrows are priority app bindings, not listed here.
 ESCAPE_HATCH_KEYS = {
     "ctrl+m": "show_manual",
     "ctrl+k": "setup_keys",
@@ -150,7 +150,7 @@ class Screen:
     def __init__(self, cols: int = 80, rows: int = 24) -> None:
         self.cols = cols
         self.rows = rows
-        # Flat list of Cell objects, row-major.
+        #Flat list of Cell objects in row-major order.
         self.grid: list[list[Cell]] = [
             [Cell() for _ in range(cols)] for _ in range(rows)
         ]
@@ -160,7 +160,7 @@ class Screen:
         self._scroll_top = 0
         self._scroll_bot = rows - 1
 
-        # SGR state.
+        #SGR state.
         self.cur_fg = 0
         self.cur_bg = 0
         self.cur_bold = False
@@ -169,7 +169,7 @@ class Screen:
         self.cur_strike = False
         self.cur_reverse = False
 
-        # Saved cursor for DECSC/DECRC.
+        #Saved cursor for DECSC and DECRC.
         self._saved_cx = 0
         self._saved_cy = 0
 
@@ -219,7 +219,7 @@ class Screen:
             return
         row = self.grid[self.cy]
         if self.cx >= self.cols:
-            # Auto-wrap.
+            #Auto-wrap.
             self.cx = 0
             self.cy += 1
             if self.cy > self._scroll_bot:
@@ -368,7 +368,7 @@ class Screen:
             elif 30 <= p <= 37:
                 self.cur_fg = p - 30 + 1
             elif p == 38:
-                # Extended fg. Next param is 5 (256) or 2 (truecolor).
+                #Extended fg. The next param is 5 for 256 colors or 2 for RGB.
                 if i + 1 < len(params):
                     mode = params[i + 1]
                     if mode == 5 and i + 2 < len(params):
@@ -398,7 +398,7 @@ class Screen:
                 self.cur_bg = p - 100 + 10
             i += 1
 
-    # VT100 line drawing character set (G0).
+    #VT100 line drawing charset for G0.
     _DEC_SPECIAL = {
         "`": "\u25c6", "a": "\u2592", "b": "\u2409", "c": "\u240c",
         "d": "\u240d", "e": "\u240a", "f": "\u00b0", "g": "\u00b1",
@@ -418,12 +418,12 @@ class Screen:
         while i < n:
             ch = data[i]
             if ch == "\x1b":
-                # Escape sequence.
+                #Escape sequence.
                 if i + 1 >= n:
                     break
                 nxt = data[i + 1]
                 if nxt == "[":
-                    # CSI sequence. Parse params + final byte.
+                    #CSI sequence. Parse the params and the final byte.
                     j = i + 2
                     params_str = ""
                     while j < n and (data[j].isdigit() or data[j] in ";?"):
@@ -431,7 +431,7 @@ class Screen:
                         j += 1
                     if j < n:
                         final = data[j]
-                        # Strip private-mode marker (?) so int() does not crash.
+                        #Strip the private-mode marker so int() cannot crash.
                         clean_ps = params_str.lstrip("?")
                         params = [int(p) if p else 0 for p in clean_ps.split(";") if p != ""]
                         self._handle_csi(final, params, clean_ps)
@@ -439,7 +439,7 @@ class Screen:
                     else:
                         break
                 elif nxt == "]":
-                    # OSC sequence. Skip until BEL or ST.
+                    #OSC sequence. Skip until BEL or ST.
                     j = i + 2
                     while j < n and data[j] != "\x07" and data[j: j + 2] != "\x1b\\":
                         j += 1
@@ -448,13 +448,13 @@ class Screen:
                     else:
                         break
                 elif nxt == "(":
-                    # G0 charset designate.
+                    #G0 charset designate.
                     if i + 2 < n:
                         charset = data[i + 2]
-                        # We track this per-feed since it's rare.
-                        # DEC Special Graphics = '0'. Set a flag and translate.
+                        #We track this per-feed since it's rare.
+                        #DEC Special Graphics = '0'. Set a flag and translate.
                         if charset == "0":
-                            # Translate following chars until another charset switch.
+                            #Translate chars until the next charset switch.
                             j = i + 3
                             while j < n:
                                 if data[j] == "\x1b":
@@ -471,7 +471,7 @@ class Screen:
                     else:
                         break
                 elif nxt == ")":
-                    # G1 charset. Skip.
+                    FIXUP_G1
                     i += 3
                 elif nxt == "D":
                     self._newline()
@@ -493,13 +493,13 @@ class Screen:
                     self._restore_cursor()
                     i += 2
                 elif nxt == "=":
-                    # Application keypad mode.
+                    #Application keypad mode.
                     i += 2
                 elif nxt == ">":
-                    # Normal keypad mode.
+                    #Normal keypad mode.
                     i += 2
                 elif nxt == "c":
-                    # RIS reset.
+                    #RIS reset.
                     self.__init__(self.cols, self.rows)
                     i += 2
                 else:
@@ -517,19 +517,19 @@ class Screen:
                 self._cursor_back(1)
                 i += 1
             elif ch == "\x07":
-                # Bell. Ignore.
+                #Bell. Ignore.
                 i += 1
             elif ch == "\x0f":
-                # SI (shift in). Ignore.
+                #SI shift in. Ignore.
                 i += 1
             elif ch == "\x0e":
-                # SO (shift out). Ignore.
+                #SO shift out. Ignore.
                 i += 1
             elif ord(ch) < 32:
-                # Other control chars. Skip.
+                #Other control chars. Skip.
                 i += 1
             else:
-                # Printable char.
+                #Printable char.
                 self._put_char(ch)
                 i += 1
 
@@ -604,16 +604,16 @@ class Screen:
         elif final == "T":
             self._scroll_down(params[0] if params and params[0] else 1)
         elif final == "h" or final == "l":
-            pass  # Mode set/reset. Ignore most.
+            pass  #Mode set or reset. Ignore most.
         elif final == "n":
-            pass  # Device status report. Ignore.
+            pass  #Device status report. Ignore.
         elif final == "c":
-            pass  # Device attributes. Ignore.
+            pass  #Device attributes. Ignore.
         elif final == "s":
             self._save_cursor()
         elif final == "u":
             self._restore_cursor()
-        # Unknown CSI: ignore.
+        #Unknown CSI. Ignore.
 
     def _color_to_rich(self, val: int) -> str:
         if val == 0:
@@ -735,7 +735,7 @@ class TerminalDisplay(Widget):
         self._connected = False
         self._overlay_done = False
         self._apc = APCStream()
-        # Row render cache. Only dirty rows get rebuilt.
+        #Row render cache. Rebuild only dirty rows.
         self._row_cache: list[Text] = [Text(" " * 80) for _ in range(24)]
         self._cached_render: Optional[Text] = None
         self._pending_text: str = ""
@@ -799,7 +799,7 @@ class TerminalDisplay(Widget):
             flags = fcntl.fcntl(self._master_fd, fcntl.F_GETFL)
             fcntl.fcntl(self._master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
             self._resize_pty()
-            # Start background reader thread. Never blocks event loop on PTY I/O.
+            #Start the reader thread. Never block the loop on PTY I/O.
             self._reader_stop.clear()
             self._reader_thread = threading.Thread(
                 target=self._reader_loop, daemon=True
@@ -808,8 +808,8 @@ class TerminalDisplay(Widget):
             self._poll_timer = self.set_interval(0.016, self._drain_queue)
 
     def _reader_loop(self) -> None:
-        # Background thread: reads PTY, parses ANSI, renders rows.
-        # Event loop only joins ready Text objects. Zero parsing on main thread.
+        #Background thread reads the PTY, parses ANSI and renders rows.
+        #The loop only joins ready Text objects. No parsing on the main thread.
         fd = self._master_fd
         screen = self._screen
         while not self._reader_stop.is_set():
@@ -849,7 +849,7 @@ class TerminalDisplay(Widget):
                         dirty_rows[y] = screen.render_row(y)
                 screen.dirty.clear()
             if dirty_rows:
-                # Cap backlog. Drop oldest when paused so resume does not flood.
+                #Cap backlog. Drop oldest when paused so resume does not flood.
                 if self._read_queue.qsize() > 8:
                     try:
                         self._read_queue.get_nowait()
@@ -865,7 +865,7 @@ class TerminalDisplay(Widget):
                 pass
 
     def send_key(self, key: str, char: str | None) -> None:
-        # MUST only os.write and return. No refresh() here.
+        #Only os.write and return. No refresh here.
         data = key_to_bytes(key, char)
         if not data or self._master_fd is None or not self._pty_running:
             _dbg(f"send_key DROP key={key!r} data={data!r} running={self._pty_running}")
@@ -881,7 +881,7 @@ class TerminalDisplay(Widget):
                     _dbg(f"send_key ERR key={key!r} errno={e.errno}")
                     return
                 _dbg(f"send_key EAGAIN key={key!r} attempt={attempt}")
-                # Buffer full. Wait for write-readiness, not a zero-delay spin.
+                #Buffer full. Wait for write-readiness, not a spin.
                 try:
                     select.select([], [fd], [], 0.01)
                 except (OSError, ValueError):
@@ -932,9 +932,9 @@ class TerminalDisplay(Widget):
         else:
             self._resize_pty()
 
-    # Timer drains queue at 60fps. Pause/resume controls visibility.
+    #Timer drains the queue at 60fps. Pause and resume control visibility.
     def pause_polling(self) -> None:
-        # Drain stale items so resume does not replay an old backlog.
+        #Drain stale items so resume does not replay an old backlog.
         _dbg("pause_polling")
         while True:
             try:
@@ -1013,7 +1013,7 @@ class TerminalDisplay(Widget):
 
 
 if __name__ == "__main__":
-    # Self-check: basic text rendering.
+    #Self-check text rendering.
     s = Screen(20, 5)
     s.feed("Hello")
     assert s.grid[0][0].char == "H", f"got {s.grid[0][0].char}"
@@ -1021,20 +1021,20 @@ if __name__ == "__main__":
     assert s.cx == 5, f"cx={s.cx}"
     print("test1 pass: basic text")
 
-    # Self-check: newline + carriage return.
+    #Self-check newline and carriage return.
     s = Screen(20, 5)
     s.feed("AB\r\nCD")
     assert s.grid[0][0].char == "A"
     assert s.grid[1][0].char == "C", f"got {s.grid[1][0].char}"
     print("test2 pass: newline")
 
-    # Self-check: cursor movement.
+    #Self-check cursor movement.
     s = Screen(20, 5)
     s.feed("\x1b[3;5HX")
     assert s.grid[2][4].char == "X", f"got {s.grid[2][4].char}"
     print("test3 pass: cursor positioning")
 
-    # Self-check: SGR colors.
+    #Self-check SGR colors.
     s = Screen(20, 5)
     s.feed("\x1b[31mR\x1b[0mN")
     assert s.grid[0][0].char == "R"
@@ -1044,73 +1044,73 @@ if __name__ == "__main__":
     assert s.grid[0][1].fg == 0
     print("test4 pass: SGR colors")
 
-    # Self-check: erase line.
+    #Self-check erase line.
     s = Screen(10, 5)
     s.feed("ABCDEFGH\x1b[2K")
     assert s.grid[0][0].char == " ", f"got {s.grid[0][0].char}"
     print("test5 pass: erase line")
 
-    # Self-check: scroll up.
+    #Self-check: scroll up.
     s = Screen(10, 3)
     s.feed("L0\r\nL1\r\nL2\r\nL3")
     assert s.grid[0][0].char == "L"
     assert s.grid[0][1].char == "1", f"row0={s.grid[0][1].char}"
     print("test6 pass: scroll")
 
-    # Self-check: dirty tracking.
+    #Self-check dirty tracking.
     s = Screen(10, 3)
     s.feed("Hi")
     assert 0 in s.dirty, f"dirty={s.dirty}"
     assert 1 not in s.dirty
     print("test7 pass: dirty tracking")
 
-    # Self-check: insert/delete char.
+    #Self-check insert and delete char.
     s = Screen(10, 1)
     s.feed("ABCDE\x1b[1G\x1b[P")
     assert s.grid[0][0].char == "B", f"got {s.grid[0][0].char}"
     print("test8 pass: delete char")
 
-    # Self-check: render row returns Text.
+    #Self-check render row returns Text.
     s = Screen(10, 1)
     s.feed("Test")
     t = s.render_row(0)
     assert "Test" in t.plain, f"got {t.plain!r}"
     print("test9 pass: render row")
 
-    # Self-check: bold + underline.
+    #Self-check bold and underline.
     s = Screen(10, 1)
     s.feed("\x1b[1;4mB\x1b[0m")
     assert s.grid[0][0].bold, "bold not set"
     assert s.grid[0][0].underline, "underline not set"
     print("test10 pass: bold+underline")
 
-    # Self-check: reverse video.
+    #Self-check reverse video.
     s = Screen(10, 1)
     s.feed("\x1b[7mR\x1b[0m")
     assert s.grid[0][0].reverse, "reverse not set"
     print("test11 pass: reverse")
 
-    # Self-check: 256-color.
+    #Self-check 256 colors.
     s = Screen(10, 1)
     s.feed("\x1b[38;5;196mA")
     assert s.grid[0][0].fg == 1000 + 196, f"fg={s.grid[0][0].fg}"
     print("test12 pass: 256-color")
 
-    # Self-check: truecolor.
+    #Self-check truecolor.
     s = Screen(10, 1)
     s.feed("\x1b[38;2;128;64;255mA")
     expected = -(128 * 65536 + 64 * 256 + 255)
     assert s.grid[0][0].fg == expected, f"fg={s.grid[0][0].fg}"
     print("test13 pass: truecolor")
 
-    # Self-check: DEC special graphics.
+    #Self-check DEC special graphics.
     s = Screen(10, 1)
     s.feed("\x1b(0lqk\x1b(B")
     assert s.grid[0][0].char == "\u250c", f"got {s.grid[0][0].char!r}"
     assert s.grid[0][1].char == "\u2500", f"got {s.grid[0][1].char!r}"
     print("test14 pass: DEC special graphics")
 
-    # Self-check: private-mode CSI (?2004h bracketed paste).
+    #Self-check private-mode CSI bracketed paste.
     s = Screen(10, 1)
     s.feed("\x1b[?2004h")
     s.feed("\x1b[?2004l")

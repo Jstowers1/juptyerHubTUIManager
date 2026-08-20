@@ -1,6 +1,6 @@
-# Remote IPython kernel client over SSH tunnels.
-# Starts a kernel on the remote, reads its connection file,
-# forwards the ZMQ ports via SSH, then talks jupyter_client locally.
+#Remote IPython kernel client over SSH tunnels.
+#Start a kernel on the remote, read its connection file,
+#forward the ZMQ ports over SSH, then talk to jupyter_client locally.
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ class CellResult:
 
 
 class RemoteKernel:
-    # Manages a remote kernel via SSH port forwarding.
+    #Manage a remote kernel through SSH port forwarding.
 
     def __init__(
         self,
@@ -50,16 +50,16 @@ class RemoteKernel:
     def alive(self) -> bool:
         if self._kc is None:
             return False
-        # Detached kernel: ask jupyter_client (heartbeat-based).
+        #Detached kernel. Ask jupyter_client, it uses heartbeats.
         return bool(self._kc.is_alive())
 
     def start(self, timeout: int = 30) -> None:
-        # Start remote kernel, read connection file, set up tunnels.
+        #Start the remote kernel, read the connection file, set up tunnels.
         self._launch_remote_kernel()
         self._start_tunnels()
         self._connect_client(timeout)
-        # Set matplotlib to Agg so plots go to PNG buffers.
-        # Drain the response so it doesn't clog the next execute().
+        #Set matplotlib to Agg so plots land in PNG buffers.
+        #Drain the response so it cannot clog the next execute.
         import queue as _queue
         self._kc.execute(
             "import matplotlib;matplotlib.use('Agg')", silent=True, store_history=False
@@ -72,18 +72,19 @@ class RemoteKernel:
                 break
 
     def _launch_remote_kernel(self) -> None:
-        # One short SSH session: start detached kernel, wait for conn file.
-        # Detached = no held mux session for kernel lifetime (MaxSessions).
+        #One short SSH session starts the detached kernel and waits for the
+        #connection file. Detached means no held mux session for the kernel
+        #lifetime, which respects MaxSessions.
         parts = [self._venv_cmd] if self._venv_cmd else []
-        # PS1 bypasses .bashrc non-interactive guard so conda functions load.
+        #PS1 bypasses the .bashrc non-interactive guard so conda loads.
         prefix = ("PS1='$ ' " + " && ".join(parts) + " && ") if parts else ""
         ts = int(time.time() * 1000)
         self._conn_file = f"/tmp/jhtui-kernel-{ts}.json"
         self._stderr_file = f"/tmp/jhtui-kernel-stderr-{ts}.log"
         env_prefix = f"PYTHONPATH={self._pythonpath} " if self._pythonpath else ""
         launcher = (
-            # Parenthesize: exec makes the subshell BECOME python, so $!
-            # is the real kernel pid. All activate errors land in EF.
+            #Parenthesize the command. exec makes the subshell become
+            #python, so $! is the real kernel pid and activate errors land in EF.
             f"( {prefix}{env_prefix}exec nohup python -m ipykernel_launcher --ip=127.0.0.1 -f {self._conn_file} )"
             f" < /dev/null >{self._stderr_file} 2>&1 &"
             + f" kernel_pid=$!;"
@@ -112,13 +113,13 @@ class RemoteKernel:
                 f"kernel launch failed (code {result.returncode})"
                 f"\n{result.stdout}{result.stderr}"
             )
-        # PID line precedes the JSON; venv noise may sit between.
+        #PID line precedes the JSON; venv noise may sit between.
         m = re.search(r"^KERNEL_PID=(\d+)", result.stdout, re.M)
         if not m:
             raise RuntimeError(f"no KERNEL_PID in output:\n{result.stdout[:500]}")
         self._kernel_pid = int(m.group(1))
         try:
-            # Brace-find: conda/venv activation noise may precede the JSON.
+            #Find the braces because activation noise may precede the JSON.
             start = result.stdout.find("{")
             end = result.stdout.rfind("}")
             if start < 0 or end <= start:
@@ -130,12 +131,12 @@ class RemoteKernel:
             ) from e
 
     def _read_connection_file(self, retries: int = 40) -> None:
-        # Kept for shutdown-restart parity; start() no longer calls it.
+        #Keep for shutdown-restart parity. start() no longer calls it.
         raise RuntimeError("connection file already read at launch")
 
     def _ssh_cmd(self) -> list[str]:
-        # Reuse the interactive terminal's ControlMaster socket.
-        # One auth at startup; kernel sessions multiplex over it.
+        #Reuse the interactive terminal ControlMaster socket.
+        #One auth at startup, kernel sessions multiplex over it.
         return self._ssh._ssh_prefix(self._node)
 
     def _read_remote_stderr(self) -> str:
@@ -147,8 +148,8 @@ class RemoteKernel:
             return ""
 
     def _start_tunnels(self) -> None:
-        # Add -L forwards to the running interactive master via -O forward.
-        # Zero extra SSH connections; the master already exists.
+        #Add -L forwards to the running master via -O forward.
+        #No extra SSH connections, the master already exists.
         ports = [
             self._conn_info["shell_port"],
             self._conn_info["iopub_port"],
@@ -182,7 +183,7 @@ class RemoteKernel:
         self._forward_cmd = cmd
 
     def _stop_tunnels(self) -> None:
-        # Remove the forwards with -O cancel (master stays up).
+        #Remove the forwards with -O cancel. The master stays up.
         if self._forward_cmd is None:
             return
         cancel = self._forward_cmd[:]
@@ -208,7 +209,7 @@ class RemoteKernel:
         self._kc = kc
 
     def _diagnose_dead_kernel(self) -> str:
-        # One short SSH session: pid alive? stderr? Kill the orphan.
+        #One short SSH session checks the pid and stderr and kills orphans.
         pid = self._kernel_pid
         probe = f"kill -0 {pid} 2>/dev/null && echo ALIVE || echo DEAD"
         parts = [probe]
@@ -225,11 +226,11 @@ class RemoteKernel:
             return "(diagnosis failed)"
 
     def execute(self, code: str, timeout: int = 120) -> CellResult:
-        # Execute code, collect all output until idle.
+        #Execute code and collect all output until idle.
         import queue as _queue
         if self._kc is None:
             return CellResult(error="kernel not started")
-        # Drain stale iopub messages.
+        #Drain stale iopub messages.
         while True:
             try:
                 self._kc.get_iopub_msg(timeout=0.01)
@@ -242,7 +243,7 @@ class RemoteKernel:
             try:
                 msg = self._kc.get_iopub_msg(timeout=2)
             except _queue.Empty:
-                # Check shell channel for idle reply.
+                #Check the shell channel for an idle reply.
                 try:
                     reply = self._kc.get_shell_msg(timeout=0.1)
                     if reply.get("parent_header", {}).get("msg_id") == msg_id:
@@ -306,7 +307,7 @@ class RemoteKernel:
             self._kc.stop_channels()
             self._kc = None
         self._stop_tunnels()
-        # Detached kernel: kill pid, clean files via one short session.
+        #Detached kernel. Kill the pid and clean files in one short session.
         if self._conn_file:
             kill = f"kill -9 {self._kernel_pid} 2>/dev/null; " if self._kernel_pid else ""
             try:
@@ -320,7 +321,7 @@ class RemoteKernel:
 
 
 def _self_check() -> None:
-    # Verify class structure without a real SSH connection.
+    #Verify the class structure without a real SSH connection.
     rk = RemoteKernel.__new__(RemoteKernel)
     rk._kc = None
     rk._forward_cmd = None

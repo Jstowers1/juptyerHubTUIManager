@@ -1,4 +1,4 @@
-# Main TUI application.
+#Main TUI application.
 
 from __future__ import annotations
 
@@ -117,7 +117,7 @@ class NodeListItem(ListItem):
 
 
 class FocusableStatic(Static):
-    # Static has can_focus=False. We need it focusable for Tab to work.
+    #Static has can_focus off. It must be focusable for Tab.
     can_focus = True
 
 
@@ -130,7 +130,7 @@ class FocusableLog(RichLog):
 
 
 def _download_fetch(ssh, node_name: str, remote_path: str) -> str:
-    # Pull a remote file/folder into ./downloads. Sync, run in a thread.
+    #Pull a remote file or folder into downloads. Sync only, run in a thread.
     local_root = Path("downloads")
     local_root.mkdir(exist_ok=True)
 
@@ -141,8 +141,11 @@ def _download_fetch(ssh, node_name: str, remote_path: str) -> str:
         except Exception:
             return got
         for e in entries:
-            r = f"{rpath}/{e['name']}"
-            l = lpath / e["name"]
+            name = str(e["name"])
+            if "/" in name or name in ("..", "."):
+                continue
+            r = f"{rpath}/{name}"
+            l = lpath / name
             if e["is_dir"]:
                 l.mkdir(parents=True, exist_ok=True)
                 got.extend(walk(r, l))
@@ -153,6 +156,9 @@ def _download_fetch(ssh, node_name: str, remote_path: str) -> str:
                     got.append(str(l))
         return got
 
+    fname = Path(remote_path).name
+    if not fname or fname in ("..", ".") or "/" in fname:
+        return "bad path"
     target = Path(remote_path.lstrip("/"))
     if target.suffix or "." in target.name:
         data = ssh.read_remote_file(node_name, remote_path)
@@ -181,9 +187,9 @@ class JupyterHubTUI(App):
             )
         return Content(title)
 
-    # Terminal.on_key intercepts escape hatches during SSH.
-    # These bindings handle dashboard mode only.
-    # Ctrl+e/r/k/s/i handled by NotebookView when notebook is active.
+    #Terminal.on_key intercepts escape hatches during SSH.
+    #These bindings handle dashboard mode only.
+    #Ctrl+e/r/k/s/i go to NotebookView when a notebook is active.
     BINDINGS = [
         Binding("ctrl+m", "show_manual", "Manual"),
         Binding("ctrl+h", "show_help", "Help"),
@@ -234,7 +240,7 @@ class JupyterHubTUI(App):
         self._populate_file_tree()
         self._node_names = list(self._ssh.nodes.keys())
         self._populate_help()
-        # Hide tabs until SSH starts.
+        #Hide tabs until SSH starts.
         self.query_one("#term-tabs").display = False
 
     def _populate_help(self) -> None:
@@ -313,8 +319,8 @@ class JupyterHubTUI(App):
         return self.query_one("#content-area", FocusableStatic)
 
     # --- SSH session mode ---
-    # Terminal can_focus defaults to False. _try_start sets it True
-    # when SSH starts. stop/_handle_exit set it back to False.
+    #Terminal can_focus defaults to off. _try_start turns it on when SSH
+    #starts. stop/_handle_exit turn it back off.
 
     def _start_ssh(self, name: str) -> None:
         if name not in self._ssh.nodes:
@@ -340,7 +346,7 @@ class JupyterHubTUI(App):
         active = self._ssh.active
         if not active:
             return
-        # Poll until background SSH works (agent key available).
+        #Poll until background SSH works and the agent key is ready.
         for _ in range(30):
             if await loop.run_in_executor(
                 None, self._ssh.check_ssh_ready, active.name
@@ -419,7 +425,7 @@ class JupyterHubTUI(App):
         self._active_term()._resize_pty()
 
     def _active_term(self) -> TerminalDisplay:
-        # Return the TerminalDisplay in the currently active tab.
+        #Return the TerminalDisplay in the active tab.
         tabs = self.query_one("#term-tabs", TabbedContent)
         if not tabs.active:
             return self._term
@@ -530,8 +536,8 @@ class JupyterHubTUI(App):
             self._term.pause_polling()
 
     def action_cycle_focus(self) -> None:
-        # Tab: Dashboard cycles left panel <-> content.
-        # During SSH, Tab does nothing (terminal swallows it).
+        #Tab cycles the left panel and the content.
+        #During SSH the terminal swallows Tab.
         if self._term.pty_active:
             return
         focused = self.focused
@@ -547,7 +553,7 @@ class JupyterHubTUI(App):
         self._active_term()._resize_pty()
 
     def action_confirm_quit(self) -> None:
-        # Escape must never kill the app directly; ask first.
+        #Escape must never kill the app directly. Ask first.
         self.push_screen(QuitScreen())
 
     def action_git_picker(self) -> None:
@@ -695,7 +701,7 @@ class JupyterHubTUI(App):
         self._open_notebook(node_name, full_path)
 
     async def on_click(self, event: Click) -> None:
-        # Right-click: file tree node or notebook image -> downloads/.
+        #Right-click a file tree node or image to download.
         if event.button != 3:
             return
         w = event.widget
@@ -712,7 +718,7 @@ class JupyterHubTUI(App):
         await self._download_remote(node_name, remote_path)
 
     def _save_clicked_image(self, img_widget) -> None:
-        # Save the right-clicked cell image into downloads/.
+        #Save the right-clicked cell image into downloads.
         p = img_widget.parent
         while p is not None and not isinstance(p, CellCard):
             p = p.parent
@@ -731,7 +737,7 @@ class JupyterHubTUI(App):
         self.notify(f"saved {out}")
 
     def _tree_node_path(self, event: Click) -> tuple[str, str] | None:
-        # Resolve a right-clicked file-tree node to (node, remote_path).
+        #Resolve a right-clicked tree node to a remote path.
         tree = event.control
         if not isinstance(tree, Tree) or tree.id != "file-tree":
             return None
@@ -750,7 +756,7 @@ class JupyterHubTUI(App):
         )
 
     async def _download_remote(self, node_name: str, remote_path: str) -> None:
-        # Pull a file or whole folder into ./downloads off the UI thread.
+        #Pull a file or folder into downloads off the UI thread.
         try:
             msg = await asyncio.to_thread(
                 _download_fetch, self._ssh, node_name, remote_path
@@ -824,7 +830,7 @@ class JupyterHubTUI(App):
 
 
 class QuitScreen(ModalScreen):
-    # Escape confirmation. Yes exits, anything else cancels.
+    #Escape confirmation. Yes exits, any other key cancels.
 
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Cancel", show=False),
@@ -853,8 +859,8 @@ class QuitScreen(ModalScreen):
         self.app.exit()
 
     def on_key(self, event) -> None:
-        # Any non-y key cancels. Swallow everything so it
-        # never leaks to the dashboard behind the modal.
+        #Any non-y key cancels. Swallow every key so nothing
+        #leaks to the dashboard behind the modal.
         if event.key != "y":
             event.stop()
             self.app.pop_screen()
@@ -936,7 +942,7 @@ class NodeEditScreen(ModalScreen):
 
 
 class GitPickerScreen(ModalScreen):
-    # Pick a directory on the REMOTE filesystem. Saves to config.git.repo_path.
+    #Pick a remote directory. Save it to config.git.repo_path.
 
     BINDINGS = [Binding("escape", "app.pop_screen", "Cancel", show=False)]
 
@@ -990,7 +996,7 @@ class GitPickerScreen(ModalScreen):
         self._populate_tree()
 
     def _node_path(self, node) -> str:
-        # Compute full remote path from root + tree labels.
+        #Compute the full remote path from the root and tree labels.
         tree = self.query_one("#dir-tree", Tree)
         labels = []
         cur = node
@@ -1052,7 +1058,7 @@ class GitPickerScreen(ModalScreen):
 
 
 class GitBranchScreen(ModalScreen):
-    # Unified git screen: branch, status, log, actions.
+    #Unified git screen with branch, status, log and actions.
 
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Close", show=False),
@@ -1131,7 +1137,7 @@ class GitBranchScreen(ModalScreen):
         self._refresh()
 
     def on_list_view_highlighted(self, event) -> None:
-        # Diff preview: files that differ from the main branch.
+        #Diff preview of files that differ from the main branch.
         if getattr(event, "list_view", None) is None or event.list_view.id != "branch-list":
             return
         item = event.item
@@ -1149,7 +1155,7 @@ class GitBranchScreen(ModalScreen):
 
     def _refresh(self) -> None:
         node = self._ssh.active.name
-        # Status
+        #Status
         porcelain = self._ssh.remote_git_status(node, self._repo)
         if porcelain:
             lines = porcelain.splitlines()
@@ -1163,10 +1169,10 @@ class GitBranchScreen(ModalScreen):
         else:
             status_text = "[red]Not a git repo or connection failed[/]"
         self.query_one("#git-status", Static).update(status_text)
-        # Log
+        #Log
         log = self._ssh.remote_git_log(node, self._repo, 10)
         self.query_one("#git-log", Static).update(log or "[dim]No commits[/]")
-        # Branches
+        #Branches
         branches = self._ssh.remote_git_branches(node, self._repo)
         current = self._ssh.remote_git_current_branch(node, self._repo)
         lv = self.query_one("#branch-list", ListView)
@@ -1178,7 +1184,7 @@ class GitBranchScreen(ModalScreen):
             lv.append(item)
         if not branches:
             lv.append(ListItem(Label("[dim]No branches[/]")))
-        # Keep focus on the branch list after refresh.
+        #Keep focus on the branch list after refresh.
         lv.focus()
 
     def action_fetch(self) -> None:

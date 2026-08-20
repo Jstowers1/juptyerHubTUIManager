@@ -1,7 +1,7 @@
-# Headless repro for key swallowing. Mirrors the REAL app layout:
-# TabbedContent, terminal tab ACTIVE, notebook tab open with N cells
+#Headless repro for key swallowing. Mirrors the REAL app layout:
+#TabbedContent, terminal tab ACTIVE, notebook tab open with N cells
 # (hidden). Types "clear" via Pilot, counts bytes reaching os.write.
-# No SSH, no real kernel. Measure, do not theorize.
+#No SSH, no real kernel. Measure, do not theorize.
 
 from __future__ import annotations
 

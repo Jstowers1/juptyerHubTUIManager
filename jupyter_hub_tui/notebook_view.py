@@ -1,5 +1,5 @@
-# Notebook viewer widget. Renders .ipynb cells, executes via RemoteKernel,
-# displays images via textual-image kitty graphics protocol.
+#Notebook viewer widget. Render ipynb cells, execute via RemoteKernel,
+#display images via the kitty graphics protocol.
 
 from __future__ import annotations
 
@@ -30,8 +30,8 @@ class CellState:
 
 
 class CellCard(Widget):
-    # One cell: editor + output area. Uses Static for display,
-    # swaps to TextArea only when focused for editing.
+    #One cell with editor and output area. Use Static for display,
+    #swap to TextArea only when focused for editing.
 
     DEFAULT_CSS = """
     CellCard {
@@ -100,15 +100,13 @@ class CellCard(Widget):
         self.index = index
         self._editing = False
         self._language = language
-        # Image zoom scale for this cell. 1.0 = fit container.
-        self._zoom = 1.0
 
     def compose(self) -> ComposeResult:
         yield Static(
             f"[{self.index}] {self.cell.cell_type}",
             classes="cell-type-badge",
         )
-        # Markdown cells render as rich Markdown, not raw source.
+        #Markdown cells render as rich Markdown, not raw source.
         if self.cell.cell_type == "markdown":
             yield Markdown(self.cell.source, classes="cell-source markdown")
         else:
@@ -127,11 +125,11 @@ class CellCard(Widget):
         if self._editing:
             return
         try:
-            # Works for both Static (code) and Markdown displays.
+            #Works for both Static and Markdown displays.
             src = self.query_one(".cell-source")
         except Exception:
             return
-        # Normalize: kernel names like ipython3 -> python (tree-sitter builtin).
+        #Normalize kernel names such as ipython3 to python for tree-sitter.
         lang = self._language.lower().replace("ipython", "python")
         lang = "python" if lang.startswith("python") else lang
         if self.cell.cell_type != "code":
@@ -143,15 +141,14 @@ class CellCard(Widget):
                 theme="monokai",
                 classes="cell-editor",
             )
-            # Textual silently drops highlighting without tree-sitter;
-            # surface it instead of guessing.
+            #Textual drops highlighting without tree-sitter. Surface it.
             if lang is not None and editor._highlight_query is None:
                 self.app.notify(
                     "Editor colors off: tree-sitter not installed",
                     severity="warning",
                 )
         except Exception as e:
-            # If tree-sitter is missing, still edit — but make it visible.
+            #Edit without color when tree-sitter is missing, but say so.
             self.app.notify(
                 f"Editor fallback (no syntax): {e}", severity="warning"
             )
@@ -170,7 +167,7 @@ class CellCard(Widget):
             return
         self.cell.source = editor.text
         editor.remove()
-        # Markdown re-renders after edit; code re-highlight.
+        #Markdown re-renders after edit and code re-highlights.
         if self.cell.cell_type == "markdown":
             self.mount(
                 Markdown(self.cell.source, classes="cell-source markdown"),
@@ -233,7 +230,7 @@ class CellCard(Widget):
             if r.stderr:
                 parts.append(f"[red]{r.stderr.rstrip()}[/]")
             if r.error:
-                # Strip ANSI color codes that break Textual markup parser.
+                #Strip ANSI codes that break the Textual markup parser.
                 clean = re.sub(r"\x1b\[[0-9;]*m", "", r.error)
                 parts.append(f"[bold red]{clean}[/]")
             n_imgs = len(r.images)
@@ -253,13 +250,13 @@ class CellCard(Widget):
         return []
 
     def _clear_image_statics(self, container) -> None:
-        # Remove mounted image Statics.
+        #Remove mounted image Statics.
         for child in list(container.children):
             if isinstance(child, Static):
                 child.remove()
 
     def rerender_images(self) -> None:
-        # Mount images with the halfcell renderer.
+        #Mount images inline, TGP renderer.
         try:
             container = self.query_one(".cell-images", VerticalScroll)
         except Exception:
@@ -285,7 +282,7 @@ class CellCard(Widget):
             try:
                 pil_img = PILImage.open(io.BytesIO(img_bytes))
                 w, h = pil_img.size
-                # Fit inline in cells; full-res bitmap, kitty scales.
+                #Fit inline in cells. Keep the full-res bitmap, kitty scales it.
                 avail_w = max(1, self.content_size.width - 2)
                 avail_h = max(1, self.screen.size.height - 6)
                 w_cells = w / cw
@@ -308,7 +305,7 @@ class CellCard(Widget):
 
 
 class NotebookView(Widget):
-    # Full notebook renderer with kernel-backed execution.
+    #Full notebook renderer with kernel-backed execution.
 
     DEFAULT_CSS = """
     NotebookView {
@@ -362,8 +359,7 @@ class NotebookView(Widget):
         yield RichLog(id="nb-status", markup=True)
 
     def on_focus(self) -> None:
-        # When NotebookView gets focus (e.g. via Ctrl+T), cascade into
-        # the active cell's TextArea.
+        #When NotebookView gains focus, cascade into the active cell.
         self._focus_cell(self._active_cell)
 
     def on_mount(self) -> None:
@@ -374,7 +370,7 @@ class NotebookView(Widget):
 
         status = self.query_one("#nb-status", RichLog)
         status.write("[yellow]Loading notebook...[/]")
-        # Wait for master socket before any non-interactive SSH.
+        #Wait for the master socket before any non-interactive SSH.
         loop = asyncio.get_event_loop()
         ready = await loop.run_in_executor(
             None, self._ssh.wait_for_master, self.node_name
@@ -404,10 +400,10 @@ class NotebookView(Widget):
                 outputs=getattr(c, "outputs", []),
             )
             self._cells.append(cs)
-        # Render cells first; kernel is not needed to view or edit.
+        #Render cells first. The kernel is not needed to view or edit.
         await self._render_cells()
         status.write(f"[yellow]Starting kernel...[/]")
-        # Start remote kernel.
+        #Start the remote kernel.
         venv_cmd = cfg.venv_activate_cmd(self._config)
         pythonpath = cfg.venv_pythonpath(self._config)
         self._kernel = RemoteKernel(
@@ -420,22 +416,22 @@ class NotebookView(Widget):
             status.write(str(e))
             return
         self.post_message(self.KernelStarted())
-        # Drain any queue via the handler above.
+        #The handler above drains the queue.
 
     async def _render_cells(self) -> None:
         scroll = self.query_one("#nb-scroll", VerticalScroll)
         scroll.remove_children()
-        # Kernel language from metadata, python fallback.
+        #Kernel language from metadata, python as fallback.
         lang = "python"
         try:
             lang = self._nb.metadata["language_info"]["name"]
         except (AttributeError, KeyError, TypeError):
             pass
-        # Normalize kernel names: ipython3/python3 -> python (tree-sitter).
+        #Normalize kernel names such as python3 to python for tree-sitter.
         lang = lang.lower().replace("ipython", "python")
         if lang.startswith("python"):
             lang = "python"
-        # Batch mount: one layout pass instead of N.
+        #Batch mount for one layout pass instead of many.
         cards = [
             CellCard(cell, i, language=lang)
             for i, cell in enumerate(self._cells)
@@ -449,7 +445,7 @@ class NotebookView(Widget):
         if not self._cells:
             return
         idx = max(0, min(idx, len(self._cells) - 1))
-        # Exit edit mode on previous cell.
+        #Exit edit mode on the previous cell.
         scroll = self.query_one("#nb-scroll", VerticalScroll)
         cards = list(scroll.query(CellCard))
         for c in cards:
@@ -482,7 +478,7 @@ class NotebookView(Widget):
         self.run_worker(self._run_cell(run_next=True), exclusive=True)
 
     async def on_notebook_view_kernel_started(self) -> None:
-        # Kernel is ready: announce and drain the run queue.
+        #Kernel ready. Announce it and drain the run queue.
         status = self.query_one("#nb-status", RichLog)
         if self._run_queue:
             status.write(
@@ -540,7 +536,7 @@ class NotebookView(Widget):
             self._focus_cell(self._active_cell + 1)
 
     async def _refresh_card_images(self, card: CellCard) -> None:
-        # Delegate to the card: it owns zoom state and buttons.
+        #The card owns image rendering.
         card.rerender_images()
 
     def action_save(self) -> None:
@@ -548,7 +544,7 @@ class NotebookView(Widget):
 
     async def _save_notebook(self) -> None:
         loop = asyncio.get_event_loop()
-        # Build nbformat from current cells.
+        #Build nbformat from current cells.
         nb = nbformat.v4.new_notebook()
         scroll = self.query_one("#nb-scroll", VerticalScroll)
         cards = scroll.query(CellCard)

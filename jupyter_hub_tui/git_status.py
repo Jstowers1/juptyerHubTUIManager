@@ -1,4 +1,4 @@
-# Git status via subprocess. No hardcoding, uses cwd of the TUI.
+#Git status via subprocess. Use the TUI cwd, hardcode nothing.
 
 import subprocess
 from dataclasses import dataclass
@@ -17,7 +17,7 @@ class GitStatus:
 
 
 def status(path: str = ".") -> GitStatus | None:
-    # Get git status for a repo. Returns None if not a git repo.
+    #Get git status for a repo. Return None outside a repo.
     branch = _branch(path)
     if not branch:
         return None
@@ -78,7 +78,7 @@ def _run_git(path: str, args: list[str]) -> str | None:
 
 
 def _self_check() -> None:
-    # Self-check: run against this repo.
+    #Self-check against this repo.
     repo = str(Path(__file__).resolve().parent.parent)
     s = status(repo)
     assert s is not None, "Not a git repo?"

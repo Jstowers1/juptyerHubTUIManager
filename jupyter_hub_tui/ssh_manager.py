@@ -1,4 +1,4 @@
-# SSH connection manager. Tracks which node is active, builds connect commands.
+#SSH connection manager. Track the active node and build connect commands.
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ class Node:
 
 
 class SSHManager:
-    # Wraps ssh subprocess management. Does not hold persistent connections.
+    #Wrap ssh subprocess management. Hold no persistent connections.
 
     def __init__(self, data: dict[str, Any]):
         self._data = data
@@ -51,7 +51,7 @@ class SSHManager:
         return None
 
     def set_active(self, name: str) -> Node:
-        # Mark a node as the active connection target.
+        #Mark a node as the active connection target.
         node = self._nodes[name]
         self._active = name
         return node
@@ -73,8 +73,8 @@ class SSHManager:
         return cmd
 
     def command(self, name: str) -> list[str]:
-        # Build the ssh command for a node. Uses kitty +kitten ssh when available
-        # to copy terminfo and enable graphics over the connection.
+        #Build the ssh command for a node. Use kitty +kitten ssh when available
+        #to copy terminfo and enable graphics over the connection.
         node = self._nodes[name]
         cmd = _base_ssh_command()
         cmd += [
@@ -94,7 +94,7 @@ class SSHManager:
         return " ".join(self.command(name))
 
     def launch(self, name: str) -> list[str]:
-        # Return the raw SSH command for the embedded terminal to run.
+        #Return the raw SSH command for the embedded terminal.
         return self.raw_ssh_command(name)
 
     def _control_path(self, name: str) -> str:
@@ -119,8 +119,8 @@ class SSHManager:
         return cmd
 
     def _ensure_socket(self, name: str) -> None:
-        # Remove a stale ControlSocket: file exists, no live master behind.
-        # ssh -O check talks to the local socket only, no network needed.
+        #Remove a stale ControlSocket. The file exists but no master lives behind it.
+        #The ssh -O check talks to the local socket. It needs no network.
         cp = self._control_path(name)
         if not os.path.exists(cp):
             return
@@ -141,7 +141,7 @@ class SSHManager:
                 pass
 
     def wait_for_master(self, name: str, timeout: int = 15) -> bool:
-        # Block until the interactive master socket is usable.
+        #Block until the interactive master socket is usable.
         import time as _time
         self._ensure_socket(name)
         cp = self._control_path(name)
@@ -191,7 +191,7 @@ class SSHManager:
         return entries
 
     def remote_git_status(self, name: str, path: str) -> str | None:
-        # Run git status on remote. Returns porcelain output or None.
+        #Run git status on the remote. Return porcelain output or None.
         cmd = self._ssh_prefix(name) + [
             f"git -C {shlex.quote(path)} status --porcelain=v1 -b 2>/dev/null",
         ]
@@ -204,7 +204,7 @@ class SSHManager:
         return result.stdout.strip() or None
 
     def remote_git_log(self, name: str, path: str, count: int = 10) -> str:
-        # Return recent commit log from remote.
+        #Return the recent commit log from the remote.
         cmd = self._ssh_prefix(name) + [
             f"git -C {shlex.quote(path)} log --oneline -{count} 2>/dev/null",
         ]
@@ -245,7 +245,7 @@ class SSHManager:
         return result.stdout.strip()
 
     def remote_git_diff_branch(self, name: str, path: str, branch: str) -> str:
-        # Files that differ between main and branch.
+        #Files that differ between main and the branch.
         base = self.remote_git_main_branch(name, path)
         cmd = self._ssh_prefix(name) + [
             f"git -C {shlex.quote(path)} diff --stat {base}...{shlex.quote(branch)} 2>/dev/null",
@@ -257,7 +257,7 @@ class SSHManager:
         return result.stdout.strip()
 
     def remote_git_main_branch(self, name: str, path: str) -> str:
-        # Detect main vs master, cache nothing: one cheap remote call.
+        #Detect main or master. Cache nothing, it is one cheap remote call.
         cmd = self._ssh_prefix(name) + [
             f"git -C {shlex.quote(path)} symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@'",
         ]
@@ -340,7 +340,7 @@ class SSHManager:
         return result.returncode == 0
 
     def _quote_remote_path(self, path: str) -> str:
-        # Quote a path for remote shell, keeping ~ expansion.
+        #Quote a path for the remote shell and keep tilde expansion.
         if path == "~":
             return "~"
         if path.startswith("~/"):
@@ -348,7 +348,7 @@ class SSHManager:
         return shlex.quote(path)
 
     def read_remote_file(self, name: str, path: str) -> bytes | None:
-        # Read a remote file via SSH cat. Returns None on failure.
+        #Read a remote file via SSH cat. Return None on failure.
         qpath = self._quote_remote_path(path)
         cmd = self._ssh_prefix(name) + [f"cat {qpath}"]
         try:
@@ -364,7 +364,7 @@ class SSHManager:
         return result.stdout
 
     def write_remote_file(self, name: str, path: str, data: bytes) -> bool:
-        # Write a remote file via SSH stdin redirect.
+        #Write a remote file through the SSH stdin redirect.
         qpath = self._quote_remote_path(path)
         cmd = self._ssh_prefix(name) + [f"cat > {qpath}"]
         for attempt in range(3):
@@ -373,7 +373,7 @@ class SSHManager:
                     cmd, input=data, capture_output=True, stdin=subprocess.DEVNULL, timeout=20
                 )
             except (subprocess.TimeoutExpired, FileNotFoundError):
-                # MaxSessions limit: wait for a slot then retry.
+                #MaxSessions limit. Wait for a slot and retry.
                 if attempt < 2:
                     import time as _t
                     _t.sleep(1)
@@ -382,7 +382,7 @@ class SSHManager:
             if result.returncode == 0:
                 return True
             err = result.stderr.decode(errors="replace")
-            # MaxSessions or multiplexing error: retry.
+            #MaxSessions or multiplexing error. Retry.
             if "mux" in err.lower() or "session" in err.lower():
                 if attempt < 2:
                     import time as _t
@@ -392,8 +392,8 @@ class SSHManager:
         return False
 
     def setup_keys_command(self) -> list[str]:
-        # Return a shell command that generates a key and copies it to all nodes.
-        # Runs in the embedded terminal so the user can enter passwords.
+        #Return a shell command that makes a key and copies it to all nodes.
+        #It runs in the embedded terminal so the user can enter passwords.
         targets = []
         for name, node in self._nodes.items():
             targets.append(f"ssh-copy-id -p {node.port} {node.user}@{node.host}")
@@ -406,7 +406,7 @@ class SSHManager:
 
 
 def _base_ssh_command() -> list[str]:
-    # Use kitty +kitten ssh if kitty is the parent terminal.
+    #Use kitty +kitten ssh when kitty is the parent terminal.
     if os.environ.get("KITTY_WINDOW_ID") or os.environ.get("KITTY_PID"):
         return ["kitty", "+kitten", "ssh"]
     return ["ssh"]
