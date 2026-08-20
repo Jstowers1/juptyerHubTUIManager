@@ -390,6 +390,8 @@ class NotebookView(Widget):
                 outputs=getattr(c, "outputs", []),
             )
             self._cells.append(cs)
+        # Render cells first; kernel is not needed to view or edit.
+        await self._render_cells()
         status.write(f"[yellow]Starting kernel...[/]")
         # Start remote kernel.
         venv_cmd = cfg.venv_activate_cmd(self._config)
@@ -404,7 +406,6 @@ class NotebookView(Widget):
             status.write(str(e))
             return
         status.write(f"[green]Kernel ready[/]  {len(self._cells)} cells")
-        await self._render_cells()
         self.post_message(self.KernelStarted())
 
     async def _render_cells(self) -> None:
@@ -465,7 +466,7 @@ class NotebookView(Widget):
         self.run_worker(self._run_cell(run_next=True), exclusive=True)
 
     async def _run_cell(self, run_next: bool = False) -> None:
-        if self._kernel is None:
+        if self._kernel is None or not self._kernel.alive:
             self.notify("Kernel not ready", severity="warning")
             return
         card = self._current_card()
