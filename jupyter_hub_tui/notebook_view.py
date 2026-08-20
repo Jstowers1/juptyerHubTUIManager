@@ -131,11 +131,19 @@ class CellCard(Widget):
             src = self.query_one(".cell-source")
         except Exception:
             return
-        editor = TextArea(
-            text=self.cell.source,
-            language=self._language if self.cell.cell_type == "code" else None,
-            classes="cell-editor",
-        )
+        # Normalize: kernel names like ipython3 -> python (tree-sitter builtin).
+        lang = self._language.lower().replace("ipython", "python")
+        lang = "python" if lang.startswith("python") else lang
+        if self.cell.cell_type != "code":
+            lang = None
+        try:
+            editor = TextArea(
+                text=self.cell.source,
+                language=lang,
+                classes="cell-editor",
+            )
+        except Exception:
+            editor = TextArea(text=self.cell.source, classes="cell-editor")
         src.remove()
         self.mount(editor)
         self._editing = True
@@ -251,15 +259,32 @@ class CellCard(Widget):
             return
         container.add_class("has-images")
         try:
-            from textual_image.renderable import Image as AutoImage
+            from textual_image.renderable.tgp import Image as TGPRenderable
             from PIL import Image as PILImage
         except ImportError:
             return
         for img_bytes in images:
             try:
                 pil_img = PILImage.open(io.BytesIO(img_bytes))
-                # Auto: TGP on kitty, sixel where supported, else halfcell.
-                renderable = AutoImage(pil_img, width="auto", height="auto")
+                w, h = pil_img.size
+                # Explicit TGP: auto-detect fails under Textual (stdin owned).
+                # int width/height are CELLS, hard cap below 297-diacritic limit.
+                try:
+                    from textual_image._terminal import get_cell_size
+
+                    cw, chh = get_cell_size() or (8, 16)
+                except Exception:
+                    cw, chh = 8, 16
+                img_cw = w / cw
+                img_ch = h / chh
+                fit = min(
+                    max(10, container.size.width - 2) / max(img_cw, 1),
+                    max(10, container.size.height - 2) / max(img_ch, 1),
+                    1.0,
+                )
+                cells_w = min(int(img_cw * fit), 290)
+                cells_h = min(int(img_ch * fit), 290)
+                renderable = TGPRenderable(pil_img, width=cells_w, height=cells_h)
                 container.mount(Static(renderable, classes="img-display"))
             except Exception:
                 pass
@@ -391,6 +416,8 @@ class NotebookView(Widget):
             lang = self._nb.metadata["language_info"]["name"]
         except (AttributeError, KeyError, TypeError):
             pass
+        # Normalize kernel names: ipython3 -> python for tree-sitter/pygments.
+        lang = lang.lower().replace("ipython", "python")
         # Batch mount: one layout pass instead of N.
         cards = [
             CellCard(cell, i, language=lang)
