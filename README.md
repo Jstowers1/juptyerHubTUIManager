@@ -1,96 +1,91 @@
 # jupyter-hub-tui
 
-Textual TUI for managing remote cluster access. Replaces JupyterHub for SSH,
-git, venv, and notebook workflows. All operations happen over SSH.
+A terminal UI that runs remote Jupyter notebooks over SSH. No browser, no web server, no port forwarding setup. One binary, one SSH connection, full notebooks in the terminal.
 
-## What it does
+## Highlights
 
-- SSH into cluster nodes from an embedded terminal
-- Browse remote files and open `.ipynb` notebooks in tabs
-- Run notebook cells on a remote IPython kernel
-- Display plot output as full-resolution inline images (kitty graphics protocol)
-- Syntax-colored code cells in both display and edit modes (tree-sitter)
-- Right-click files, folders, or cell images to download to `./downloads/`
-- Remote git status, log, branches, fetch, pull, checkout
-- Proxy jump support for nodes behind a login node
-- SSH ControlMaster so all commands reuse one connection
-- Kernel starts in the background; cells render instantly on open
+- **Full notebooks in the terminal.** Open any remote `.ipynb`, edit cells, execute code, and read output without leaving the TUI.
+- **Inline plot rendering.** Matplotlib figures display as full-resolution images inside the terminal through the kitty graphics protocol. No manual sizing, no external viewer.
+- **One SSH connection for everything.** A single ControlMaster session multiplexes the shell, file browser, git, file transfers, and kernel traffic. One passphrase entry per session.
+- **Custom VT100 terminal emulator.** The embedded terminal parses escape sequences in pure Python. It coexists with the TUI widget tree in one process.
+- **Kernel startup without blocking.** Cells render and accept edits while the kernel boots. Run requests queue and execute in order when the kernel is ready.
+- **Remote kernel selection.** Pick any Jupyter kernelspec on the remote host. The client resolves its launch command, environment, and argv automatically.
+- **Syntax-colored editing.** Tree-sitter highlights code in display and edit modes. Kernel language names are normalized automatically.
 
-## Setup
+## Tech Stack
 
-1. Clone the repo.
-2. `python3 -m venv .venv && source .venv/bin/activate`
-3. `pip install -r requirements.txt`
-4. Copy `config.example.json` to `config.json`.
-5. Fill in your cluster node details.
-6. Run: `python3 -m jupyter_hub_tui`
+| Layer | Technology |
+|-------|------------|
+| TUI framework | Textual |
+| Terminal emulation | Custom VT100 parser |
+| Kernel protocol | ZMQ via jupyter_client |
+| Notebook format | nbformat |
+| Image rendering | kitty graphics protocol via textual-image |
+| Syntax highlighting | tree-sitter |
+| Image decoding | Pillow |
+| Transport | OpenSSH with ControlMaster |
 
-Run inside **kitty** for inline image rendering. Other terminals will work
-for everything except images.
+## Install
 
-## What's new
+Requires Python 3.11+ and OpenSSH.
 
-- Right-click downloads: files, folders (recursive), and cell images to
-  `./downloads/`.
-- Kernel starts in the background. Cells render and are editable while
-  it spins up; run requests queue and execute in order when ready.
-- Syntax-colored code cells in display and edit modes (tree-sitter,
-  monokai). Kernel language names like `ipython3` are normalized to
-  `python`.
-- Inline images sized in terminal cells to fit the card, full-resolution
-  bitmap via the kitty graphics protocol. No manual size controls.
-- Git screen: current branch marker, fetch/pull/checkout hints.
-- Escape shows a quit confirmation instead of exiting immediately.
+```
+pipx install git+https://github.com/Jstowers1/juptyerHubTUIManager.git
+```
 
-## How notebooks work
+Or from a checkout:
 
-No euporie, no browser, no JupyterHub. The TUI talks to the kernel directly.
+```
+git clone https://github.com/Jstowers1/juptyerHubTUIManager.git
+cd juptyerHubTUIManager
+pip install .
+```
 
-1. Open a `.ipynb` file from the remote file browser.
-2. The file is read over SSH (`cat`) and parsed with `nbformat`. Cells render
-   immediately.
-3. A remote IPython kernel starts on the cluster node via SSH, in the
-   background. Cells are editable while it spins up.
-4. The kernel prints its connection file path. The TUI reads it over SSH.
-5. The TUI opens SSH port tunnels for all five ZMQ ports (shell, iopub,
-   stdin, control, heartbeat) on a single SSH connection.
-6. The TUI connects to the kernel locally via `jupyter_client`.
-7. Run a cell with `Ctrl+E`. Code goes out over ZMQ, output comes back.
-   Runs requested while the kernel is still starting are queued and
-   executed in order once it is ready.
-8. Matplotlib output is forced to `Agg` backend so plots render to PNG
-   buffers. PNG data comes back as base64 over iopub.
-9. The TUI decodes the PNG and renders it with `textual-image` TGPImage
-   sized in terminal cells to fit the card, which sends the full-res
-   bitmap via the kitty graphics protocol for sharp inline display.
+This installs the `jhtui` binary. The binary starts `ssh-agent`, loads the default key, then runs the TUI. Enter the key passphrase once per session.
 
-### Architecture
+Run inside kitty for inline images. Every other feature works in any terminal.
+
+## Quick start
+
+1. Copy the config template:
+
+```
+mkdir -p ~/.config/jhtui
+cp config.example.json ~/.config/jhtui/config.json
+```
+
+2. Fill in node details. Each node needs a host, user, and port. Nodes behind a login node set `"proxy"` to the login node name.
+
+3. Run `jhtui`.
+
+4. Connect to a node from the list. The embedded terminal opens an SSH session. Press `Ctrl+\` to toggle the file sidebar.
+
+5. Open a `.ipynb` file. It opens in a notebook tab with a kernel starting in the background.
+
+## How it works
+
+The TUI speaks the native Jupyter kernel protocol. It does not wrap a web frontend.
+
+1. The user opens a notebook from the remote file browser. The TUI reads the file over SSH and renders the cells.
+2. The TUI launches a detached kernel on the remote host through SSH. The launch waits until the kernel writes its connection file.
+3. The TUI forwards all five ZMQ ports (shell, iopub, stdin, control, heartbeat) through the existing SSH master connection.
+4. A local `jupyter_client` connects through the tunnels.
+5. Cell execution sends code over ZMQ and collects output, images, and errors from iopub.
+6. Matplotlib output is forced to the Agg backend. Plots arrive as PNG data and render inline at full resolution.
+
+### Components
 
 ```
 jupyter_hub_tui/
   app.py            Main TUI. Tabs, sidebar, keybindings, screens.
-  terminal.py       Embedded PTY terminal (custom VT100 parser). SSH shell lives here.
+  terminal.py       Embedded PTY terminal with a custom VT100 parser.
   notebook_view.py  Notebook renderer. Cell editors, output, images.
-  kernel_client.py  Remote IPython kernel manager. SSH tunnels + ZMQ.
+  kernel_client.py  Remote kernel manager. Launch, tunnels, execution.
   ssh_manager.py    SSH command builder. ControlMaster, proxy jumps.
   git_status.py     Remote git porcelain parser.
-  config.py         config.json loader.
-  apc.py            APC sequence parser (unused after euporie removal).
+  config.py         Config loader. User and repo locations.
+  launcher.py       Binary entry point. ssh-agent setup.
 ```
-
-### Remote requirements
-
-The cluster node must have:
-- Python with `ipykernel` installed in the venv
-- The venv activation command must put ipykernel on PATH
-- SSH access (password or key)
-
-The `activate_cmd` config key tells the TUI how to activate the venv on
-the remote. Example: `source ~/.bashrc && icetop-cnn`.
-
-The `pythonpath` config key sets `PYTHONPATH` before the kernel starts.
-This matters when your repo has modules that shadow installed packages
-(e.g. a local `utils.py` shadowing PyPI `utils`).
 
 ## Controls
 
@@ -98,68 +93,47 @@ This matters when your repo has modules that shadow installed packages
 
 | Key | Action |
 |-----|--------|
-| `1`-`3` | Connect to node by index (dashboard) |
-| `Tab` | Toggle focus between panels (dashboard) |
-| `Ctrl+\` | Toggle sidebar (works during SSH) |
-| `Ctrl+N` | Disconnect and return to dashboard |
-| `Ctrl+E` | Edit active node (host, user, port, proxy) |
-| `Ctrl+M` | View cluster manual |
-| `Ctrl+K` | Generate and copy SSH keys to all nodes |
-| `Ctrl+R` | Refresh status and file tree |
-| `Ctrl+G` | Pick git repo path (browse remote dirs) |
-| `Ctrl+B` | Git screen: status, log, branches |
-| `Ctrl+H` | Show help |
-| `Esc` | Quit |
+| `1`-`3` | Connect to node by index |
+| `Tab` | Cycle sidebar widgets |
+| `Ctrl+\` | Toggle sidebar |
+| `Ctrl+T` | Toggle terminal focus |
+| `Ctrl+N` | Disconnect |
+| `Ctrl+H` | Help |
+| `Esc` | Quit with confirmation |
 
-### Terminal (SSH session)
+### Notebooks
 
 | Key | Action |
 |-----|--------|
-| `Ctrl+\` | Toggle file browser sidebar |
-| `Ctrl+W` | Close current tab |
-| `Ctrl+Left/Right` | Switch tabs |
-
-### Notebook tabs
-
-| Key | Action |
-|-----|--------|
-| `Ctrl+E` | Run current cell |
+| `Enter` | Open notebook |
+| `Ctrl+E` | Run cell |
 | `Ctrl+R` | Run cell, move to next |
 | `Ctrl+S` | Save notebook to remote |
 | `Ctrl+I` | Interrupt kernel |
-| `Ctrl+K` / `Ctrl+J` | Move to previous / next cell |
-| `Ctrl+W` | Close tab (shuts down kernel) |
+| `Ctrl+K` / `Ctrl+J` | Previous / next cell |
+| `Ctrl+Shift+K` | Pick kernel spec |
+| `Ctrl+W` | Close tab |
 
-Cell editing is always on: the focused cell is the editor. Move away with
-`Ctrl+K`/`Ctrl+J` to commit. Code is syntax colored in both display and
-edit modes (requires `tree-sitter` and `tree-sitter-python`).
+The focused cell is the editor. Type to edit. Moving cells commits changes.
 
-### Downloads
-
-Right-click (any mouse button-3 press):
-
-| Target | Result |
-|--------|--------|
-| File in sidebar tree | Saved to `./downloads/<name>` |
-| Folder in sidebar tree | Recursively downloaded to `./downloads/<name>/` |
-| Cell image | PNG saved to `./downloads/image-N.png` |
-
-Downloads run off the UI thread; the status line reports the result.
-
-### Git screen (Ctrl+B)
+### Git
 
 | Key | Action |
 |-----|--------|
+| `Ctrl+G` | Pick repo path |
+| `Ctrl+B` | Git screen |
 | `f` | Fetch |
 | `p` | Pull |
-| `Enter` | Checkout selected branch |
+| `Enter` | Checkout branch |
 | `Esc` | Close |
 
-The current branch is marked with a green `*`.
+### Downloads
 
-## Config
+Right-click a file, folder, or cell image. Files and folders download to `./downloads/`. Folders download recursively. Cell images save as PNG.
 
-`config.json` is gitignored. `config.example.json` is the template.
+## Configuration
+
+The config file lives at `~/.config/jhtui/config.json`. A `config.json` next to the package takes priority in a dev checkout.
 
 ### Nodes
 
@@ -169,65 +143,42 @@ The current branch is marked with a green `*`.
     "login": {
       "host": "login.example.org",
       "user": "youruser",
-      "port": 22,
-      "description": "Primary login node"
+      "port": 22
     },
     "worker-1": {
       "host": "worker-1.example.org",
       "user": "youruser",
       "port": 22,
-      "description": "Compute node",
       "proxy": "login"
     }
   }
 }
 ```
 
-Nodes behind a login node use the `proxy` field. The value must match
-another node name. SSH uses `-J user@host:port` for the hop.
+The `proxy` field routes SSH through another node with a proxy jump.
 
 ### venv
 
 ```json
 {
   "venv": {
-    "activate_cmd": "source ~/.bashrc && icetop-cnn",
-    "pythonpath": "/home/youruser/icetop-cnn"
+    "activate_cmd": "source ~/.venv/bin/activate",
+    "pythonpath": "/home/youruser/project"
   }
 }
 ```
 
-`activate_cmd`: Shell command that activates the remote venv. Must put
-`ipykernel` on PATH so the TUI can start a kernel.
+`activate_cmd` activates the remote environment before the kernel starts. `pythonpath` prepends `PYTHONPATH` for import shadowing.
 
-`pythonpath`: Optional. Prepended as `PYTHONPATH` before kernel start.
+## Remote requirements
 
-### git
-
-```json
-{
-  "git": {
-    "repo_path": "/home/youruser/icetop-cnn"
-  }
-}
-```
-
-Set via `Ctrl+G` (browses the remote filesystem). Git status, log,
-branches, fetch, pull, and checkout all operate on the remote repo.
-
-### browse_path
-
-Starting directory for the remote file browser. Defaults to `~`.
-
-## ControlMaster
-
-The interactive SSH session becomes a ControlMaster. All remote commands
-(file browser, git, kernel, file read/write) reuse that connection without
-re-authenticating. One passphrase entry per session.
+- Python 3.11+ with `ipykernel` in the target environment
+- `jupyter_client` available for kernelspec resolution
+- OpenSSH server
 
 ## Self-checks
 
-Each module has a `__main__` self-check:
+Each module runs a self-check:
 
 ```
 python3 -m jupyter_hub_tui.ssh_manager
@@ -235,3 +186,7 @@ python3 -m jupyter_hub_tui.kernel_client
 python3 -m jupyter_hub_tui.notebook_view
 python3 -m jupyter_hub_tui.git_status
 ```
+
+## License
+
+MIT

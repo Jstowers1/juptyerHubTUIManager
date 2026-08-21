@@ -1,13 +1,25 @@
-#Load config from config.json and fall back to the example template.
+#Load config from config.json. Search order:
+#1. ~/.config/jhtui/config.json (for installed binary)
+#2. config.json next to the package (dev checkout)
+#3. config.example.json (template fallback)
 
 import json
 import os
 from pathlib import Path
 from typing import Any
 
-_CONFIG_DIR = Path(__file__).resolve().parent.parent
-_CONFIG_FILE = _CONFIG_DIR / "config.json"
-_EXAMPLE_FILE = _CONFIG_DIR / "config.example.json"
+_PACKAGE_DIR = Path(__file__).resolve().parent.parent
+_USER_CONFIG = Path.home() / ".config" / "jhtui" / "config.json"
+_REPO_CONFIG = _PACKAGE_DIR / "config.json"
+_EXAMPLE_FILE = _PACKAGE_DIR / "config.example.json"
+
+
+def _find_config() -> Path:
+    if _USER_CONFIG.exists():
+        return _USER_CONFIG
+    if _REPO_CONFIG.exists():
+        return _REPO_CONFIG
+    return _EXAMPLE_FILE
 
 
 class ConfigError(Exception):
@@ -15,15 +27,20 @@ class ConfigError(Exception):
 
 
 def load() -> dict[str, Any]:
-    path = _CONFIG_FILE if _CONFIG_FILE.exists() else _EXAMPLE_FILE
+    path = _find_config()
     try:
         with open(path) as f:
             data = json.load(f)
     except json.JSONDecodeError as exc:
-        raise ConfigError(f"Bad JSON in {path.name}: {exc}") from exc
+        raise ConfigError(f"Bad JSON in {path}: {exc}") from exc
     if path == _EXAMPLE_FILE:
         data["_example"] = True
     return data
+
+
+def config_path() -> Path:
+    #Path of the loaded config file.
+    return _find_config()
 
 
 def nodes(data: dict[str, Any]) -> dict[str, dict]:
@@ -47,9 +64,15 @@ def browse_path(data: dict[str, Any]) -> str:
 
 
 def save(data: dict[str, Any]) -> None:
-    #Write config to config.json. Strip internal keys first.
+    #Write config. Strip internal keys first. Writes to the
+    #same path load() reads from. For the example template,
+    #create ~/.config/jhtui/config.json instead.
     clean = {k: v for k, v in data.items() if not k.startswith("_")}
-    with open(_CONFIG_FILE, "w") as f:
+    path = _find_config()
+    if path == _EXAMPLE_FILE:
+        path = _USER_CONFIG
+        path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
         json.dump(clean, f, indent=2)
 
 

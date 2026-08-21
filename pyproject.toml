@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jupyter-hub-tui"
+version = "1.0.0"
+description = "Terminal UI for remote notebook kernels over SSH"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "textual>=8.2",
+    "nbformat>=5.10",
+    "jupyter-client>=8.5",
+    "ipykernel>=7.0",
+    "pyzmq>=25.0",
+    "textual-image>=0.5",
+    "pillow>=10.0",
+    "tree-sitter>=0.24",
+    "tree-sitter-python>=0.21",
+]
+
+[project.scripts]
+jhtui = "jupyter_hub_tui.launcher:main"
+
+[tool.setuptools]
+packages = ["jupyter_hub_tui"]
