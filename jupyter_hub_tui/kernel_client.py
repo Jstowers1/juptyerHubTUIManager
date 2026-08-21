@@ -36,11 +36,13 @@ class RemoteKernel:
         node_name: str,
         venv_cmd: str = "",
         pythonpath: str = "",
+        kernelspec: str = "",
     ) -> None:
         self._ssh = ssh
         self._node = node_name
         self._venv_cmd = venv_cmd
         self._pythonpath = pythonpath
+        self._kernelspec = kernelspec
         self._kc: BlockingKernelClient | None = None
         self._forward_cmd: list[str] | None = None
         self._kernel_pid: int | None = None
@@ -82,10 +84,14 @@ class RemoteKernel:
         self._conn_file = f"/tmp/jhtui-kernel-{ts}.json"
         self._stderr_file = f"/tmp/jhtui-kernel-stderr-{ts}.log"
         env_prefix = f"PYTHONPATH={self._pythonpath} " if self._pythonpath else ""
+        #Build the kernel launch command. Use kernelspec argv if given,
+        #otherwise default to ipykernel_launcher.
+        if self._kernelspec:
+            launch_argv = self._resolve_kernelspec()
+        else:
+            launch_argv = f"exec nohup python -m ipykernel_launcher --ip=127.0.0.1 -f {self._conn_file}"
         launcher = (
-            #Parenthesize the command. exec makes the subshell become
-            #python, so $! is the real kernel pid and activate errors land in EF.
-            f"( {prefix}{env_prefix}exec nohup python -m ipykernel_launcher --ip=127.0.0.1 -f {self._conn_file} )"
+            f"( {prefix}{env_prefix}{launch_argv} )"
             f" < /dev/null >{self._stderr_file} 2>&1 &"
             + f" kernel_pid=$!;"
             + f" for i in $(seq 1 140); do"
@@ -138,6 +144,50 @@ class RemoteKernel:
         #Reuse the interactive terminal ControlMaster socket.
         #One auth at startup, kernel sessions multiplex over it.
         return self._ssh._ssh_prefix(self._node)
+
+    def _resolve_kernelspec(self) -> str:
+        #Read the kernelspec kernel.json over SSH, substitute
+        #{connection_file}, return the launch argv as a shell string.
+        import shlex as _shlex
+        finder = (
+            f"python -c \"import json,sys;"
+            f"from jupyter_client.kernelspec import KernelSpecManager;"
+            f"ks=KernelSpecManager();"
+            f"p=ks.get_kernel_spec({self._kernelspec!r});"
+            f"print(json.dumps({{'argv':p.argv,'env':p.env}}))\""
+        )
+        cmd = self._ssh_cmd() + [finder]
+        try:
+            r = subprocess.run(
+                cmd, capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=15
+            )
+        except subprocess.TimeoutExpired:
+            r = None
+        if r is None or r.returncode != 0:
+            raise RuntimeError(
+                f"kernelspec '{self._kernelspec}' not found on remote"
+            )
+        try:
+            start = r.stdout.find("{")
+            spec = json.loads(r.stdout[start:])
+        except (json.JSONDecodeError, ValueError):
+            raise RuntimeError(f"bad kernelspec json:\n{r.stdout[:300]}")
+        argv = spec.get("argv", [])
+        if not argv:
+            raise RuntimeError("kernelspec has empty argv")
+        #Substitute {connection_file} and quote each token.
+        quoted = []
+        for tok in argv:
+            tok = tok.replace("{connection_file}", self._conn_file)
+            quoted.append(_shlex.quote(tok))
+        env_prefix = ""
+        for k, v in (spec.get("env") or {}).items():
+            env_prefix += f"{k}={_shlex.quote(str(v))} "
+        launch = env_prefix + "exec nohup " + " ".join(quoted)
+        #Only ipykernel understands --ip. Other kernels would crash on it.
+        if any("ipykernel" in t for t in argv):
+            launch += " --ip=127.0.0.1"
+        return launch
 
     def _read_remote_stderr(self) -> str:
         cmd = self._ssh_cmd() + [f"cat {self._stderr_file}"]

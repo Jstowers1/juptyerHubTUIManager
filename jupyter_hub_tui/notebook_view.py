@@ -14,8 +14,9 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.message import Message
+from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import Markdown, RichLog, Static, TextArea
+from textual.widgets import Markdown, OptionList, RichLog, Static, TextArea
 
 from .kernel_client import CellResult, RemoteKernel
 
@@ -304,6 +305,51 @@ class CellCard(Widget):
         return len(self.get_images()) > 0
 
 
+class KernelPickerScreen(ModalScreen[str]):
+    #Modal kernel selector. Dismisses with the kernelspec name or None.
+
+    DEFAULT_CSS = """
+    KernelPickerScreen {
+        align: center middle;
+    }
+    KernelPickerScreen OptionList {
+        width: 48;
+        height: auto;
+        max-height: 16;
+        border: round $accent;
+    }
+    KernelPickerScreen #kernel-hints {
+        width: 48;
+        height: auto;
+    }
+    """
+
+    def __init__(self, specs: list[str], current: str) -> None:
+        super().__init__()
+        self._specs = specs
+        self._current = current
+
+    def compose(self) -> ComposeResult:
+        yield OptionList(*self._specs, id="kernel-list")
+        yield Static(
+            f"[dim]enter=select  esc=cancel  current: {self._current or 'default'}[/]",
+            id="kernel-hints",
+        )
+
+    def on_mount(self) -> None:
+        ol = self.query_one("#kernel-list", OptionList)
+        if self._current in self._specs:
+            ol.highlighted = self._specs.index(self._current)
+        ol.focus()
+
+    def on_option_list_option_selected(self, event) -> None:
+        self.dismiss(str(event.option.prompt))
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            self.dismiss(None)
+
+
 class NotebookView(Widget):
     #Full notebook renderer with kernel-backed execution.
 
@@ -332,6 +378,7 @@ class NotebookView(Widget):
         Binding("ctrl+i", "interrupt", "Interrupt", show=False, priority=True),
         Binding("ctrl+k", "prev_cell", "Prev", show=False, priority=True),
         Binding("ctrl+j", "next_cell", "Next", show=False, priority=True),
+        Binding("ctrl+shift+k", "pick_kernel", "Kernel", show=True, priority=True),
     ]
 
     class KernelStarted(Message):
@@ -353,6 +400,7 @@ class NotebookView(Widget):
         self._kernel: RemoteKernel | None = None
         self._active_cell = 0
         self._run_queue: list[tuple[CellCard, bool]] = []
+        self._kernelspec: str = ""
 
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="nb-scroll")
@@ -402,14 +450,28 @@ class NotebookView(Widget):
             self._cells.append(cs)
         #Render cells first. The kernel is not needed to view or edit.
         await self._render_cells()
-        status.write(f"[yellow]Starting kernel...[/]")
-        #Start the remote kernel.
+        await self._start_kernel()
+
+    async def _start_kernel(self) -> None:
+        #Start or restart the remote kernel with the selected kernelspec.
+        from . import config as cfg
+
+        status = self.query_one("#nb-status", RichLog)
+        if self._kernel is not None:
+            try:
+                self._kernel.shutdown()
+            except Exception:
+                pass
+            self._kernel = None
         venv_cmd = cfg.venv_activate_cmd(self._config)
         pythonpath = cfg.venv_pythonpath(self._config)
+        spec = f" ({self._kernelspec})" if self._kernelspec else ""
+        status.write(f"[yellow]Starting kernel{spec}...[/]")
         self._kernel = RemoteKernel(
-            self._ssh, self.node_name, venv_cmd, pythonpath
+            self._ssh, self.node_name, venv_cmd, pythonpath, self._kernelspec
         )
         try:
+            loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, self._kernel.start)
         except Exception as e:
             status.write(f"[red]Kernel failed:[/]")
@@ -571,6 +633,28 @@ class NotebookView(Widget):
         if self._kernel is not None:
             self._kernel.interrupt()
             self.notify("Interrupt sent")
+
+    def action_pick_kernel(self) -> None:
+        #List remote kernelspecs, show the picker, restart on selection.
+        async def fetch_specs() -> list[str]:
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                None, self._ssh.list_remote_kernelspecs, self.node_name
+            )
+
+        async def opened() -> None:
+            specs = await fetch_specs()
+            if not specs:
+                self.notify("No kernelspecs found on remote", severity="warning")
+                return
+            picker = KernelPickerScreen(specs, self._kernelspec)
+            picked = await self.app.push_screen_wait(picker)
+            if picked:
+                self._kernelspec = picked
+                self.notify(f"Restarting with kernel: {picked}")
+                await self._start_kernel()
+
+        self.run_worker(opened, exclusive=True)
 
     def shutdown_kernel(self) -> None:
         if self._kernel is not None:

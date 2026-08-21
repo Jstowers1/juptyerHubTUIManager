@@ -214,6 +214,25 @@ class SSHManager:
             return ""
         return result.stdout.strip()
 
+    def list_remote_kernelspecs(self, name: str) -> list[str]:
+        #List jupyter kernelspec names on the remote node.
+        cmd = self._ssh_prefix(name) + ["jupyter kernelspec list 2>/dev/null"]
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=15
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return []
+        specs = []
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line or " " not in line:
+                continue
+            kname, _, rest = line.partition(" ")
+            if rest.lstrip().startswith(("~", "/")):
+                specs.append(kname)
+        return specs
+
     def remote_git_fetch(self, name: str, path: str) -> bool:
         cmd = self._ssh_prefix(name) + [
             f"git -C {shlex.quote(path)} fetch 2>&1",

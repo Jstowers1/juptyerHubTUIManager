@@ -197,7 +197,7 @@ class JupyterHubTUI(App):
         Binding("ctrl+b", "git_branch", "Git Branch"),
         Binding("ctrl+backslash", "toggle_sidebar", "Sidebar", priority=True),
         Binding("ctrl+t", "toggle_term_focus", "Focus", priority=True),
-        Binding("ctrl+w", "close_tab", "Close Tab"),
+        Binding("ctrl+w", "close_tab", "Close Tab", priority=True),
         Binding("ctrl+o", "activate_venv", "Venv"),
         Binding("ctrl+left", "prev_tab", "Prev Tab", show=False, priority=True),
         Binding("ctrl+right", "next_tab", "Next Tab", show=False, priority=True),
@@ -281,6 +281,7 @@ class JupyterHubTUI(App):
         hp.write("  Ctrl+J       Move to next cell")
         hp.write("  Ctrl+S       Save notebook")
         hp.write("  Ctrl+I       Interrupt kernel")
+        hp.write("  Ctrl+Shift+K Pick kernel spec (restarts kernel)")
         hp.write("")
         hp.write("[cyan]Editing[/]")
         hp.write("  Cells open in the editor on focus. Type to edit.")
