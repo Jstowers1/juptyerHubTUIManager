@@ -192,6 +192,7 @@ class JupyterHubTUI(App):
     #Ctrl+e/r/k/s/i go to NotebookView when a notebook is active.
     BINDINGS = [
         Binding("ctrl+m", "show_manual", "Manual"),
+        Binding("ctrl+k", "setup_keys", "SSH Keys"),
         Binding("ctrl+h", "show_help", "Help"),
         Binding("ctrl+g", "git_picker", "Git Repo"),
         Binding("ctrl+b", "git_branch", "Git Branch"),
