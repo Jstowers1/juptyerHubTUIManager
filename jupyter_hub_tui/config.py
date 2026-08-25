@@ -31,6 +31,9 @@ def load() -> dict[str, Any]:
     try:
         with open(path) as f:
             data = json.load(f)
+    except FileNotFoundError:
+        #No config anywhere. Start with an empty template.
+        return {"nodes": {}, "_example": True}
     except json.JSONDecodeError as exc:
         raise ConfigError(f"Bad JSON in {path}: {exc}") from exc
     if path == _EXAMPLE_FILE:
