@@ -425,10 +425,34 @@ class SSHManager:
 
 
 def _base_ssh_command() -> list[str]:
-    #Use kitty +kitten ssh when kitty is the parent terminal.
+    #Use kitty +kitten ssh when kitty is the parent terminal and the
+    #bootstrap is complete. A half-downloaded kitty install makes every
+    #connection die instantly, so verify the binary is real first.
     if os.environ.get("KITTY_WINDOW_ID") or os.environ.get("KITTY_PID"):
-        return ["kitty", "+kitten", "ssh"]
+        if _kitten_works():
+            return ["kitty", "+kitten", "ssh"]
     return ["ssh"]
+
+
+def _kitten_works() -> bool:
+    #Kitty bootstrap shims download on first run. A real install answers
+    #--version without network access. Timeout kills a stalled download.
+    import shutil
+    import subprocess
+
+    kitty = shutil.which("kitty")
+    if not kitty:
+        return False
+    try:
+        r = subprocess.run(
+            [kitty, "--version"],
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            timeout=10,
+        )
+        return r.returncode == 0 and b"kitty" in r.stdout
+    except (subprocess.TimeoutExpired, OSError):
+        return False
 
 
 def _self_check() -> None:
