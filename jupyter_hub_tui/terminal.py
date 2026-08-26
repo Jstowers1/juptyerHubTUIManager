@@ -173,6 +173,9 @@ class Screen:
         self._saved_cx = 0
         self._saved_cy = 0
 
+        #DECTCEM cursor visibility. Apps hide the cursor when they want.
+        self.cursor_visible = True
+
         self._mark_all()
 
     def resize(self, rows: int, cols: int) -> None:
@@ -301,20 +304,36 @@ class Screen:
                 self._mark(r)
 
     def _cursor_up(self, n: int = 1) -> None:
+        old = self.cy
         self.cy = max(self._scroll_top, self.cy - n)
+        if self.cursor_visible:
+            self._mark(old)
+            self._mark(self.cy)
 
     def _cursor_down(self, n: int = 1) -> None:
+        old = self.cy
         self.cy = min(self._scroll_bot, self.cy + n)
+        if self.cursor_visible:
+            self._mark(old)
+            self._mark(self.cy)
 
     def _cursor_forward(self, n: int = 1) -> None:
         self.cx = min(self.cols - 1, self.cx + n)
+        if self.cursor_visible:
+            self._mark(self.cy)
 
     def _cursor_back(self, n: int = 1) -> None:
         self.cx = max(0, self.cx - n)
+        if self.cursor_visible:
+            self._mark(self.cy)
 
     def _set_cursor(self, row: int, col: int) -> None:
+        old_r = self.cy
         self.cy = max(0, min(row - 1, self.rows - 1))
         self.cx = max(0, min(col - 1, self.cols - 1))
+        if self.cursor_visible:
+            self._mark(old_r)
+            self._mark(self.cy)
 
     def _save_cursor(self) -> None:
         self._saved_cx = self.cx
@@ -604,7 +623,13 @@ class Screen:
         elif final == "T":
             self._scroll_down(params[0] if params and params[0] else 1)
         elif final == "h" or final == "l":
-            pass  #Mode set or reset. Ignore most.
+            #Mode set or reset. 25 = DECTCEM cursor visibility.
+            on = final == "h"
+            for p in params:
+                if p == 25:
+                    if self.cursor_visible != on:
+                        self.cursor_visible = on
+                        self._mark(self.cy)
         elif final == "n":
             pass  #Device status report. Ignore.
         elif final == "c":
@@ -650,6 +675,8 @@ class Screen:
 
     def render_row(self, y: int) -> Text:
         row = self.grid[y]
+        #Cursor cell renders reverse video. Draws the block cursor.
+        cur = self.cursor_visible and y == self.cy
         parts: list[Text] = []
         run_text = ""
         run_style = ""
@@ -671,6 +698,8 @@ class Screen:
                 bg = cell.bg
 
             style_parts: list[str] = []
+            if cur and x == self.cx:
+                style_parts.append("reverse")
             if fg:
                 c = self._color_to_rich(fg)
                 if c:
@@ -1115,5 +1144,21 @@ if __name__ == "__main__":
     s.feed("\x1b[?2004h")
     s.feed("\x1b[?2004l")
     print("test15 pass: private-mode CSI")
+
+    #Self-check cursor visibility and block render.
+    s = Screen(10, 3)
+    s.feed("hi\x1b[3;5HX")
+    assert s.cy == 2 and s.cx == 5, f"pos {s.cy},{s.cx}"
+    row = s.render_row(2).plain
+    assert row[4] == "X", f"char {row[4]!r}"
+    s2 = s.render_row(2)
+    assert any("reverse" in str(sp.style) for sp in s2.spans), "cursor not reverse"
+    s.feed("\x1b[?25l")
+    assert not s.cursor_visible, "hide failed"
+    s3 = s.render_row(2)
+    assert not any("reverse" in str(sp.style) for sp in s3.spans), "still reverse"
+    s.feed("\x1b[?25h")
+    assert s.cursor_visible, "show failed"
+    print("test16 pass: cursor visibility + block render")
 
     print("ALL PASS")
