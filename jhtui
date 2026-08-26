@@ -2,4 +2,4 @@
 # jhtui: dev launcher. Runs from the checkout.
 cd "$(dirname "$0")"
 source .venv/bin/activate
-exec python -m jupyter_hub_tui.launcher "$@"
+exec python -m jupyter_hub_tui "$@"
