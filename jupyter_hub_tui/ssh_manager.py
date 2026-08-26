@@ -413,9 +413,18 @@ class SSHManager:
     def setup_keys_command(self) -> list[str]:
         #Return a shell command that makes a key and copies it to all nodes.
         #It runs in the embedded terminal so the user can enter passwords.
+        #Non-proxy nodes first: proxied nodes jump through them.
         targets = []
-        for name, node in self._nodes.items():
-            targets.append(f"ssh-copy-id -p {node.port} {node.user}@{node.host}")
+        for name, node in sorted(
+            self._nodes.items(), key=lambda kv: 0 if not kv[1].proxy else 1
+        ):
+            jump = ""
+            if node.proxy and node.proxy in self._nodes:
+                p = self._nodes[node.proxy]
+                jump = f" -o ProxyJump={p.user}@{p.host}:{p.port}"
+            targets.append(
+                f"ssh-copy-id -p {node.port}{jump} {node.user}@{node.host}"
+            )
         script = (
             "test -f ~/.ssh/id_ed25519 || "
             "ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N ''; "
