@@ -12,8 +12,9 @@ import sys
 
 
 def _start_agent() -> None:
-    #Spawn ssh-agent if no agent socket exists, add the default key.
-    if os.environ.get("SSH_AUTH_SOCK"):
+    #Spawn ssh-agent if no live agent socket exists, add the default key.
+    sock = os.environ.get("SSH_AUTH_SOCK", "")
+    if sock and os.path.exists(sock):
         return
     try:
         out = subprocess.run(
@@ -25,14 +26,17 @@ def _start_agent() -> None:
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return
+    #Agent output is shell syntax: VAR=val; export VAR;
+    #Split on semicolons first or the env var keeps the export clause.
     for line in out.stdout.splitlines():
-        if line.startswith("SSH_AUTH_SOCK="):
-            sock = line.split("=", 1)[1].rstrip(";").strip()
-            os.environ["SSH_AUTH_SOCK"] = sock
-        elif line.startswith("SSH_AGENT_PID="):
-            pid = line.split("=", 1)[1].rstrip(";").strip()
-            os.environ["SSH_AGENT_PID"] = pid
-            atexit.register(_kill_agent, pid)
+        for tok in line.split(";"):
+            tok = tok.strip()
+            if tok.startswith("SSH_AUTH_SOCK="):
+                os.environ["SSH_AUTH_SOCK"] = tok.split("=", 1)[1]
+            elif tok.startswith("SSH_AGENT_PID="):
+                pid = tok.split("=", 1)[1]
+                os.environ["SSH_AGENT_PID"] = pid
+                atexit.register(_kill_agent, pid)
     key = os.path.expanduser("~/.ssh/id_ed25519")
     if os.path.exists(key):
         #Inherit the terminal. ssh-add prompts for the passphrase here,
