@@ -11,7 +11,7 @@ from typing import Any
 _PACKAGE_DIR = Path(__file__).resolve().parent.parent
 _USER_CONFIG = Path.home() / ".config" / "jhtui" / "config.json"
 _REPO_CONFIG = _PACKAGE_DIR / "config.json"
-_EXAMPLE_FILE = _PACKAGE_DIR / "config.example.json"
+_EXAMPLE_FILE = _PACKAGE_DIR / "jupyter_hub_tui" / "config.example.json"
 
 
 def _find_config() -> Path:
@@ -44,6 +44,16 @@ def load() -> dict[str, Any]:
 def config_path() -> Path:
     #Path of the loaded config file.
     return _find_config()
+
+
+def init_user_config() -> Path:
+    #Copy the example template to ~/.config/jhtui/config.json.
+    if _USER_CONFIG.exists():
+        return _USER_CONFIG
+    _USER_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    import shutil
+    shutil.copy(_EXAMPLE_FILE, _USER_CONFIG)
+    return _USER_CONFIG
 
 
 def nodes(data: dict[str, Any]) -> dict[str, dict]:

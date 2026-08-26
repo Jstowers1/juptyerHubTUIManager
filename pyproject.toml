@@ -26,3 +26,6 @@ jhtui = "jupyter_hub_tui.launcher:main"
 
 [tool.setuptools]
 packages = ["jupyter_hub_tui"]
+
+[tool.setuptools.package-data]
+jupyter_hub_tui = ["config.example.json"]

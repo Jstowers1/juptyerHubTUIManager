@@ -25,6 +25,13 @@ def _spawn_agent() -> None:
 
 
 def main() -> None:
+    import sys
+    if "--init-config" in sys.argv:
+        from .config import init_user_config
+        p = init_user_config()
+        print(f"Config template written to {p}")
+        print("Edit it, then run jhtui.")
+        return
     #Spawn an agent only when no socket is exported.
     if not os.environ.get("SSH_AUTH_SOCK"):
         _spawn_agent()

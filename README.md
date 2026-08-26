@@ -39,7 +39,14 @@ Or from a checkout:
 git clone https://github.com/Jstowers1/juptyerHubTUIManager.git
 cd juptyerHubTUIManager
 pip install .
+
+For a pipx install, create the config once:
+
 ```
+jhtui --init-config
+```
+
+This writes `~/.config/jhtui/config.json` from the template. Edit it with your node list.
 
 This installs the `jhtui` binary. The binary starts `ssh-agent`, loads the default key, then runs the TUI. Enter the key passphrase once per session.
 
