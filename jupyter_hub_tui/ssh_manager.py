@@ -422,8 +422,11 @@ class SSHManager:
             if node.proxy and node.proxy in self._nodes:
                 p = self._nodes[node.proxy]
                 jump = f" -o ProxyJump={p.user}@{p.host}:{p.port}"
+            #GSSAPI stalls the key verification when the KDC is
+            #unreachable from the client. Publickey is all we need.
             targets.append(
-                f"ssh-copy-id -p {node.port}{jump} {node.user}@{node.host}"
+                f"ssh-copy-id -o GSSAPIAuthentication=no -o ConnectTimeout=10 "
+                f"-p {node.port}{jump} {node.user}@{node.host}"
             )
         script = (
             "test -f ~/.ssh/id_ed25519 || "
