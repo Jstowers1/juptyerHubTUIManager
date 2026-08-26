@@ -176,6 +176,9 @@ class Screen:
         #DECTCEM cursor visibility. Apps hide the cursor when they want.
         self.cursor_visible = True
 
+        #Alt screen snapshot for mode 1049. None = main screen.
+        self._alt_saved = None
+
         self._mark_all()
 
     def resize(self, rows: int, cols: int) -> None:
@@ -256,12 +259,16 @@ class Screen:
             self._mark(r)
 
     def _newline(self) -> None:
+        if self.cursor_visible:
+            self._mark(self.cy)
         self.cy += 1
         if self.cy > self._scroll_bot:
             self._scroll_up(1)
             self.cy = self._scroll_bot
 
     def _cr(self) -> None:
+        if self.cursor_visible:
+            self._mark(self.cy)
         self.cx = 0
 
     def _tab(self) -> None:
@@ -630,6 +637,30 @@ class Screen:
                     if self.cursor_visible != on:
                         self.cursor_visible = on
                         self._mark(self.cy)
+                elif p == 1049 and on and not self._alt_saved:
+                    #Enter alt screen. Snapshot the grid. Cells copy deep:
+                    #a shallow row copy would share Cell objects with writes.
+                    def snap(row: list[Cell]) -> list[Cell]:
+                        out = []
+                        for c in row:
+                            n = Cell()
+                            n.copy_from(c)
+                            out.append(n)
+                        return out
+
+                    self._alt_saved = (
+                        [snap(row) for row in self.grid],
+                        self.cx, self.cy, self.cursor_visible,
+                    )
+                elif p == 1049 and not on and self._alt_saved is not None:
+                    #Leave alt screen. Restore the snapshot.
+                    grid, cx, cy, vis = self._alt_saved
+                    self.grid = [row[:] for row in grid]
+                    self.cx = cx
+                    self.cy = cy
+                    self.cursor_visible = vis
+                    self._alt_saved = None
+                    self._mark_all()
         elif final == "n":
             pass  #Device status report. Ignore.
         elif final == "c":
@@ -1160,5 +1191,24 @@ if __name__ == "__main__":
     s.feed("\x1b[?25h")
     assert s.cursor_visible, "show failed"
     print("test16 pass: cursor visibility + block render")
+
+    #Self-check newline/carriage-return dirty the row left behind.
+    s = Screen(20, 5)
+    s.feed("one\r\ntwo\r\n")
+    ghosts = [y for y in range(5) if any("reverse" in str(sp.style) for sp in s.render_row(y).spans)]
+    assert ghosts == [2], f"cursor ghosts on rows {ghosts}"
+    print("test17 pass: no ghost cursor after newline")
+
+    #Self-check alt screen save and restore.
+    s = Screen(20, 5)
+    s.feed("main\r\n")
+    s.feed("\x1b[?1049h")
+    s.feed("\x1b[2J\x1b[H")
+    s.feed("VIM\r\n")
+    assert "VIM" in s.render_row(0).plain, "alt screen text missing"
+    s.feed("\x1b[?1049l")
+    assert "main" in s.render_row(0).plain, "main screen not restored"
+    assert "VIM" not in "\n".join(s.render_row(y).plain for y in range(5)), "vim text leaked"
+    print("test18 pass: alt screen restore")
 
     print("ALL PASS")

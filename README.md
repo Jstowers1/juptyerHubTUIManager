@@ -48,6 +48,14 @@ jhtui --init-config
 
 This writes `~/.config/jhtui/config.json` from the template. Edit it with your node list.
 
+Or install the latest release with pipx:
+
+```
+pipx install git+https://github.com/Jstowers1/juptyerHubTUIManager.git@v<latest-tag>
+```
+
+Every `v*` git tag now builds a wheel and publishes a GitHub release automatically.
+
 This installs the `jhtui` binary. The binary starts `ssh-agent`, loads the default key, then runs the TUI. Enter the key passphrase once per session.
 
 Run inside kitty for inline images. Every other feature works in any terminal.
