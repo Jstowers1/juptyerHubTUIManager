@@ -20,7 +20,29 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" dist/*.whl \
-            --title "${GITHUB_REF_NAME}" \
-            --generate-notes
+          #Idempotent: re-tagging must update, not fail.
+          if ! gh release view "${GITHUB_REF_NAME}" -R "$REPO"; then
+            gh release create "${GITHUB_REF_NAME}" -R "$REPO" \
+              --title "${GITHUB_REF_NAME}" --generate-notes
+          fi
+          gh release upload "${GITHUB_REF_NAME}" dist/*.whl -R "$REPO" --clobber
+      - name: Append pipx install command
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          #ponytail: sed on the generated body, no templating engine.
+          gh release view "${GITHUB_REF_NAME}" -R "$REPO" --json body -q .body > body.md
+          WHL=$(ls dist/*.whl | xargs -n1 basename)
+          {
+            cat body.md
+            echo ""
+            echo "## Install"
+            echo ""
+            echo '```'
+            echo "pipx install https://github.com/${REPO}/releases/download/${GITHUB_REF_NAME}/${WHL}"
+            echo '```'
+          } > new.md
+          gh release edit "${GITHUB_REF_NAME}" -R "$REPO" --notes-file new.md
