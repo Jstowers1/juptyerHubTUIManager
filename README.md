@@ -60,6 +60,26 @@ This installs the `jhtui` binary. The binary starts `ssh-agent`, loads the defau
 
 Run inside kitty for inline images. Every other feature works in any terminal.
 
+## Update
+
+Reinstall from the release tag (works for any install):
+
+```
+pipx reinstall jupyter-hub-tui --pip-args 'git+https://github.com/Jstowers1/juptyerHubTUIManager.git@v1.3.0'
+```
+
+Or install the release wheel directly (URL is printed on each release page):
+
+```
+pipx install https://github.com/Jstowers1/juptyerHubTUIManager/releases/download/v1.3.0/jupyter_hub_tui-1.3.0-py3-none-any.whl
+```
+
+Check the installed version:
+
+```
+pipx list
+```
+
 ## Quick start
 
 1. Copy the config template:

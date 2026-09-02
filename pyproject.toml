@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jupyter-hub-tui"
-version = "1.2.1"
+version = "1.3.0"
 description = "Terminal UI for remote notebook kernels over SSH"
 readme = "README.md"
 requires-python = ">=3.11"
