@@ -62,13 +62,24 @@ Run inside kitty for inline images. Every other feature works in any terminal.
 
 ## Update
 
-Install the new release wheel over the old one:
+If installed from git (recommended), update to latest main:
 
 ```
-pipx install --force https://github.com/Jstowers1/juptyerHubTUIManager/releases/download/v1.3.0/jupyter_hub_tui-1.3.0-py3-none-any.whl
+pipx upgrade jupyter-hub-tui
 ```
 
-Swap `v1.3.0` for the latest tag. Find the wheel URL on each release page.
+If installed from a release wheel URL, pipx can't upgrade (the URL is frozen
+to one version). Reinstall from git to get upgrades back:
+
+```
+pipx install --force git+https://github.com/Jstowers1/juptyerHubTUIManager.git@main
+```
+
+Or pin a specific release wheel:
+
+```
+pipx install --force https://github.com/Jstowers1/juptyerHubTUIManager/releases/download/v1.3.2/jupyter_hub_tui-1.3.2-py3-none-any.whl
+```
 
 Check the installed version:
 

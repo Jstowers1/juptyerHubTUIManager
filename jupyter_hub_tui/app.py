@@ -550,7 +550,14 @@ class JupyterHubTUI(App):
             nb = pane.query_one(NotebookView)
             nb._focus_cell(nb._active_cell)
         except Exception:
-            if pane:
+            if pane is None:
+                return
+            try:
+                #Vim pane. Focus the terminal, not the TabPane shell.
+                term = pane.query_one(TerminalDisplay)
+                term.can_focus = True
+                term.focus()
+            except Exception:
                 pane.focus()
 
     def action_prev_tab(self) -> None:
