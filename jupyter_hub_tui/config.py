@@ -76,6 +76,31 @@ def browse_path(data: dict[str, Any]) -> str:
     return data.get("browse_path", "~")
 
 
+def browse_paths(data: dict[str, Any]) -> list[str]:
+    #Roots for the sidebar file trees. Migrate the legacy single path.
+    paths = data.get("browse_paths")
+    if isinstance(paths, list) and paths:
+        return [str(p) for p in paths]
+    old = data.get("browse_path")
+    return [str(old)] if old else ["~"]
+
+
+def toggle_browse_path(data: dict[str, Any], path: str) -> dict[str, Any]:
+    #Add a tree root, or remove it when it already exists.
+    paths = browse_paths(data)
+    if path in paths:
+        paths = [p for p in paths if p != path]
+    else:
+        paths.append(path)
+    if paths:
+        data["browse_paths"] = paths
+        data.pop("browse_path", None)
+    else:
+        data.pop("browse_paths", None)
+        data.pop("browse_path", None)
+    return data
+
+
 def save(data: dict[str, Any]) -> None:
     #Write config. Strip internal keys first. Writes to the
     #same path load() reads from. For the example template,

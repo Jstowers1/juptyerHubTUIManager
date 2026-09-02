@@ -320,6 +320,32 @@ class SSHManager:
             return False, "timeout"
         return result.returncode == 0, result.stdout.strip()
 
+    def remote_git_push(self, name: str, path: str) -> tuple[bool, str]:
+        cmd = self._ssh_prefix(name) + [
+            f"git -C {shlex.quote(path)} push 2>&1",
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=60)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False, "timeout"
+        return result.returncode == 0, result.stdout.strip()
+
+    def remote_git_commit(self, name: str, path: str, message: str) -> tuple[bool, str]:
+        #Commit tracked changes. Quote the message for the remote shell.
+        cmd = self._ssh_prefix(name) + [
+            f"git -C {shlex.quote(path)} commit -am {shlex.quote(message)} 2>&1",
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=30)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False, "timeout"
+        return result.returncode == 0, result.stdout.strip()
+
+    def remote_vim_command(self, name: str, path: str) -> list[str]:
+        #Vim over the shared master socket. The -tt flag from raw_ssh_command
+        #gives the remote side a pty.
+        return self.raw_ssh_command(name) + [f"vim {shlex.quote(path)}"]
+
     def scp_file(self, name: str, remote_path: str, local_path: str) -> bool:
         node = self._nodes[name]
         scp_args = ["scp"]

@@ -24,7 +24,7 @@
   "git": {
     "repo_path": "/home/youruser/repo"
   },
-  "browse_path": "~",
+  "browse_paths": ["~", "/data/user/youruser"],
   "venv": {
     "activate_cmd": "source ~/.bashrc && my-venv",
     "pythonpath": "/home/youruser/repo"

@@ -96,9 +96,10 @@ Screen {
     margin-top: 1;
 }
 
-#file-tree {
+.file-tree {
     height: 1fr;
     min-height: 5;
+    margin-top: 1;
 }
 
 #node-list {
@@ -196,6 +197,7 @@ class JupyterHubTUI(App):
         Binding("ctrl+h", "show_help", "Help"),
         Binding("ctrl+g", "git_picker", "Git Repo"),
         Binding("ctrl+b", "git_branch", "Git Branch"),
+        Binding("ctrl+f", "add_tree", "Add Tree"),
         Binding("ctrl+backslash", "toggle_sidebar", "Sidebar", priority=True),
         Binding("ctrl+t", "toggle_term_focus", "Focus", priority=True),
         Binding("ctrl+w", "close_tab", "Close Tab", priority=True),
@@ -226,7 +228,8 @@ class JupyterHubTUI(App):
                 yield ListView(id="node-list")
                 yield Label("", id="ssh-command-display")
                 yield Label("Files", classes="section-label")
-                yield Tree("root", id="file-tree")
+                yield Tree("root", id="file-tree", classes="file-tree")
+                yield Label("+ add tree (Ctrl+F)", classes="section-label", id="add-tree-label")
             with Vertical(id="right-panel"):
                 yield FocusableStatic("", id="content-area")
                 with TabbedContent(id="term-tabs"):
@@ -261,16 +264,26 @@ class JupyterHubTUI(App):
         hp.write("  Ctrl+M       View cluster manual")
         hp.write("  Ctrl+R       Refresh status / file tree")
         hp.write("  Ctrl+O       Toggle remote venv (from config)")
+        hp.write("  Ctrl+F       Add or remove a file tree root")
+        hp.write("")
+        hp.write("[cyan]Terminal scrollback[/]")
+        hp.write("  Shift+Up/Dn  Scroll one line")
+        hp.write("  Shift+PgUp/Dn Scroll one page")
+        hp.write("  Mouse wheel  Scroll 3 lines")
+        hp.write("  Any key      Snap back to live output")
         hp.write("")
         hp.write("[cyan]Git[/]")
         hp.write("  Ctrl+G       Pick git repo path (remote)")
-        hp.write("  Ctrl+B       Git screen: log, branches, fetch, pull, checkout")
+        hp.write("  Ctrl+B       Git screen: log, branches, fetch, pull, push")
         hp.write("    f          Fetch (inside git screen)")
         hp.write("    p          Pull (inside git screen)")
+        hp.write("    P          Push (inside git screen)")
+        hp.write("    m          Commit tracked changes")
         hp.write("    Enter      Checkout branch")
         hp.write("")
-        hp.write("[cyan]Notebooks[/]")
-        hp.write("  Enter        Open .ipynb in new tab (custom notebook viewer)")
+        hp.write("[cyan]Files[/]")
+        hp.write("  Enter        Open .ipynb in a notebook tab")
+        hp.write("  Enter        Open any other file in a vim tab")
         hp.write("  Ctrl+W       Close notebook tab")
         hp.write("  Ctrl+Left    Previous tab")
         hp.write("  Ctrl+Right   Next tab")
@@ -359,17 +372,18 @@ class JupyterHubTUI(App):
             self.notify("SSH connection timed out.", severity="warning")
             return
         repo_path = cfg.git_repo_path(self._data)
-        file_entries = await loop.run_in_executor(
-            None, self._fetch_file_entries, active.name)
+        entries_by_path: dict[str, list[dict]] = {}
+        for path in cfg.browse_paths(self._data):
+            entries_by_path[path] = await loop.run_in_executor(
+                None, self._fetch_file_entries, active.name, path)
         status_info = await loop.run_in_executor(
             None, self._fetch_status_info, active.name, repo_path)
-        self._apply_file_tree(file_entries)
+        self._populate_file_tree(entries_by_path)
         self._apply_status_bar(status_info)
 
-    def _fetch_file_entries(self, node_name: str) -> list[dict]:
-        browse = cfg.browse_path(self._data)
+    def _fetch_file_entries(self, node_name: str, path: str) -> list[dict]:
         try:
-            return self._ssh.list_remote_dir(node_name, browse)
+            return self._ssh.list_remote_dir(node_name, path)
         except Exception:
             return []
 
@@ -382,20 +396,42 @@ class JupyterHubTUI(App):
                 pass
         return {"git_porcelain": git_porcelain}
 
-    def _apply_file_tree(self, entries: list[dict]) -> None:
+    def _populate_file_tree(self, entries_by_path: dict[str, list[dict]] | None = None) -> None:
+        #One Tree widget per configured browse root.
+        panel = self.query_one("#left-panel")
+        for t in list(panel.query(".file-tree")):
+            t.remove()
         active = self._ssh.active
+        label = self.query_one("#add-tree-label", Label)
+        trees: list[Tree] = []
         if not active:
-            return
-        tree = self.query_one("#file-tree", Tree)
-        tree.clear()
-        browse = cfg.browse_path(self._data)
-        tree.root.set_label(f"{active.name}:{browse}")
-        tree.root.data = {"node": active.name, "path": browse}
-        if not entries:
-            tree.root.add_leaf("[dim](empty)[/]")
-        for e in entries:
-            tree.root.add(e["name"], allow_expand=e["is_dir"])
-        tree.root.expand()
+            tree = Tree("Files", classes="file-tree")
+            tree.root.add_leaf("[dim]Connect to browse files[/]")
+            tree.show_root = False
+            trees.append(tree)
+        else:
+            for path in cfg.browse_paths(self._data):
+                tree = Tree(f"{active.name}:{path}", classes="file-tree")
+                tree.root.data = {"node": active.name, "path": path}
+                if entries_by_path is not None and path in entries_by_path:
+                    entries = entries_by_path[path]
+                else:
+                    try:
+                        entries = self._ssh.list_remote_dir(active.name, path)
+                    except Exception:
+                        tree.root.add_leaf("[red]SSH connection failed[/]")
+                        tree.root.expand()
+                        trees.append(tree)
+                        continue
+                if not entries:
+                    tree.root.add_leaf("[dim](empty)[/]")
+                for e in entries:
+                    n = tree.root.add(e["name"], allow_expand=e["is_dir"])
+                    n.data = e
+                tree.root.expand()
+                trees.append(tree)
+        if trees:
+            panel.mount(*trees, before=label)
 
     def _apply_status_bar(self, info: dict) -> None:
         active = self._ssh.active
@@ -405,15 +441,26 @@ class JupyterHubTUI(App):
         self.sub_title = f"[cyan]{active.name}[/]{git_text}"
 
     def on_terminal_display_exited(self, event: TerminalDisplay.Exited) -> None:
-        if event.terminal_display.id != "term-display":
+        term = event.terminal_display
+        if term.id == "term-display":
+            self._ssh._active = None
+            self.query_one("#term-tabs").display = False
+            self._content.display = True
+            self._content.update("[yellow]SSH session ended.[/]")
+            self._content.focus()
+            self._update_status()
+            self._populate_file_tree()
             return
-        self._ssh._active = None
-        self.query_one("#term-tabs").display = False
-        self._content.display = True
-        self._content.update("[yellow]SSH session ended.[/]")
-        self._content.focus()
-        self._update_status()
-        self._populate_file_tree()
+        #Vim tab ended. Remove its pane.
+        tabs = self.query_one("#term-tabs", TabbedContent)
+        pane = term.parent
+        while pane is not None and not isinstance(pane, TabPane):
+            pane = pane.parent
+        if pane is not None and pane.id:
+            tabs.remove_pane(pane.id)
+        if not tabs.active or tabs.active == "terminal-tab":
+            self._term.resume_polling()
+        self._focus_active_pane()
 
     # --- Actions ---
 
@@ -437,23 +484,24 @@ class JupyterHubTUI(App):
         except Exception:
             return self._term
 
+    def _first_file_tree(self) -> Tree | None:
+        trees = [t for t in self.query(Tree) if "file-tree" in t.classes]
+        return trees[0] if trees else None
+
     def action_toggle_term_focus(self) -> None:
         tabs = self.query_one("#term-tabs", TabbedContent)
+        tree = self._first_file_tree()
         if tabs.active and tabs.active != "terminal-tab":
-            if self.focused and self.focused.id != "file-tree":
-                self.query_one("#file-tree", Tree).focus()
-            else:
-                pane = tabs.get_pane(tabs.active)
-                try:
-                    nb = pane.query_one(NotebookView)
-                    nb._focus_cell(nb._active_cell)
-                except Exception:
-                    pane.focus()
+            if self.focused is not None and isinstance(self.focused, Tree):
+                self._focus_active_pane()
+            elif tree is not None:
+                tree.focus()
             return
         term = self._active_term()
         if self.focused is term:
             term.can_focus = False
-            self.query_one("#file-tree", Tree).focus()
+            if tree is not None:
+                tree.focus()
         else:
             term.can_focus = True
             term.focus()
@@ -580,6 +628,18 @@ class JupyterHubTUI(App):
             return
         self.push_screen(GitBranchScreen(self._ssh, repo_path, self._on_git_action))
 
+    def action_add_tree(self) -> None:
+        #Add or remove a sidebar file tree root.
+        if not self._ssh.active:
+            self.notify("Connect to a node first.", severity="warning")
+            return
+        self.push_screen(AddTreeScreen(self._data, self._ssh, self._on_tree_saved))
+
+    def _on_tree_saved(self) -> None:
+        self._data = cfg.load()
+        self._populate_file_tree()
+        self.notify("File trees updated")
+
     def _on_git_action(self) -> None:
         self._update_status()
         self._populate_file_tree()
@@ -595,31 +655,11 @@ class JupyterHubTUI(App):
             item.data = name
             lv.append(item)
 
-    def _populate_file_tree(self) -> None:
-        tree = self.query_one("#file-tree", Tree)
-        tree.clear()
-        tree.root.set_label("Files")
-        active = self._ssh.active
-        if not active:
-            tree.root.add_leaf("[dim]Connect to browse files[/]")
-            return
-        browse = cfg.browse_path(self._data)
-        tree.root.set_label(f"{active.name}:{browse}")
-        tree.root.data = {"node": active.name, "path": browse}
-        try:
-            entries = self._ssh.list_remote_dir(active.name, browse)
-        except Exception:
-            tree.root.add_leaf("[red]SSH connection failed[/]")
-            return
-        if not entries:
-            tree.root.add_leaf("[dim](empty)[/]")
-        for e in entries:
-            tree.root.add(e["name"], allow_expand=e["is_dir"])
-        tree.root.expand()
-
     def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
+        tree = event.control
+        if not isinstance(tree, Tree) or "file-tree" not in tree.classes:
+            return
         node = event.node
-        tree = self.query_one("#file-tree", Tree)
         if node is tree.root:
             return
         root = tree.root
@@ -627,12 +667,7 @@ class JupyterHubTUI(App):
             return
         if len(node.children) > 0:
             node.remove_children()
-        labels = []
-        cur = node
-        while cur is not None and cur is not root:
-            labels.append(str(cur.label))
-            cur = cur.parent
-        labels.reverse()
+        labels = self._tree_labels(node, root)
         node_name = root.data["node"]
         full_path = root.data["path"] + "/" + "/".join(labels)
         try:
@@ -640,7 +675,19 @@ class JupyterHubTUI(App):
         except Exception:
             return
         for e in entries:
-            node.add(e["name"], allow_expand=e["is_dir"])
+            n = node.add(e["name"], allow_expand=e["is_dir"])
+            n.data = e
+
+    @staticmethod
+    def _tree_labels(node, root) -> list[str]:
+        #Path segments from a tree node to its root.
+        labels = []
+        cur = node
+        while cur is not None and cur is not root:
+            labels.append(str(cur.label))
+            cur = cur.parent
+        labels.reverse()
+        return labels
 
     def _parse_git_status(self, porcelain: str) -> str:
         if not porcelain:
@@ -680,27 +727,52 @@ class JupyterHubTUI(App):
         self._content.focus()
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
-        if event.control.id != "file-tree":
+        tree = event.control
+        if not isinstance(tree, Tree) or "file-tree" not in tree.classes:
             return
         node = event.node
-        tree = event.control
         if node is tree.root:
             return
         label = str(node.label)
-        if not label.endswith(".ipynb"):
+        data = getattr(node, "data", None)
+        if data and data.get("is_dir"):
             return
-        root = tree.root
-        if not root.data:
+        if label.endswith(".ipynb"):
+            root = tree.root
+            if not root.data:
+                return
+            labels = self._tree_labels(node, root)
+            node_name = root.data["node"]
+            full_path = root.data["path"] + "/" + "/".join(labels)
+            self._open_notebook(node_name, full_path)
+        else:
+            #Plain file. Open it in vim in a new tab.
+            root = tree.root
+            if not root.data:
+                return
+            labels = self._tree_labels(node, root)
+            node_name = root.data["node"]
+            full_path = root.data["path"] + "/" + "/".join(labels)
+            self._open_vim_tab(node_name, full_path)
+
+    def _open_vim_tab(self, node_name: str, file_path: str) -> None:
+        #Vim over the shared SSH master socket in its own tab.
+        if not self._ssh.active:
+            self.notify("No active SSH session.", severity="warning")
             return
-        labels = []
-        cur = node
-        while cur is not None and cur is not root:
-            labels.append(str(cur.label))
-            cur = cur.parent
-        labels.reverse()
-        node_name = root.data["node"]
-        full_path = root.data["path"] + "/" + "/".join(labels)
-        self._open_notebook(node_name, full_path)
+        self._nb_counter += 1
+        tab_id = f"vim-tab-{self._nb_counter}"
+        tabs = self.query_one("#term-tabs", TabbedContent)
+        tabs.display = True
+        self._content.display = False
+        term = TerminalDisplay(id=tab_id)
+        pane = TabPane(file_path.rsplit("/", 1)[-1], term, id=tab_id)
+        tabs.add_pane(pane)
+        tabs.active = tab_id
+        self._term.pause_polling()
+        term.start(self._ssh.remote_vim_command(node_name, file_path))
+        term.focus()
+        self.notify(f"Opening {file_path.rsplit('/', 1)[-1]} in vim")
 
     async def on_click(self, event: Click) -> None:
         #Right-click a file tree node or image to download.
@@ -741,17 +813,12 @@ class JupyterHubTUI(App):
     def _tree_node_path(self, event: Click) -> tuple[str, str] | None:
         #Resolve a right-clicked tree node to a remote path.
         tree = event.control
-        if not isinstance(tree, Tree) or tree.id != "file-tree":
+        if not isinstance(tree, Tree) or "file-tree" not in tree.classes:
             return None
         n = tree._get_node(event.y)
         if n is None or n is tree.root or not tree.root.data:
             return None
-        labels = []
-        cur = n
-        while cur is not None and cur is not tree.root:
-            labels.append(str(cur.label))
-            cur = cur.parent
-        labels.reverse()
+        labels = self._tree_labels(n, tree.root)
         return (
             tree.root.data["node"],
             tree.root.data["path"] + "/" + "/".join(labels),
@@ -975,17 +1042,21 @@ class GitPickerScreen(ModalScreen):
     }
     """
 
-    def __init__(self, data, ssh, on_save):
+    def __init__(self, data, ssh, on_save, title="Pick Git Repo Path (Remote)",
+                 on_pick=None):
         super().__init__()
         self._data = data
         self._ssh = ssh
         self._on_save = on_save
+        self._title = title
+        #on_pick replaces the git-repo save when set. Shared by AddTreeScreen.
+        self._on_pick = on_pick
         self._root = "~"
         self._node = ssh.active.name if ssh.active else None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="git-dialog"):
-            yield Label("Pick Git Repo Path (Remote)", id="edit-title")
+            yield Label(self._title, id="edit-title")
             yield Label(self._root, id="current-path")
             tree = Tree(self._root, id="dir-tree")
             yield tree
@@ -1053,20 +1124,35 @@ class GitPickerScreen(ModalScreen):
             return
         if event.button.id == "git-save":
             path = self.query_one("#git-path-input", Input).value
-            cfg.set_git_repo_path(self._data, path)
+            if self._on_pick is not None:
+                self._on_pick(self._data, path)
+            else:
+                cfg.set_git_repo_path(self._data, path)
             cfg.save(self._data)
             self.app.pop_screen()
             self._on_save()
+
+
+class AddTreeScreen(GitPickerScreen):
+    #Path picker that adds or removes a browse tree root.
+
+    def __init__(self, data, ssh, on_save):
+        super().__init__(
+            data, ssh, on_save,
+            title="Add or Remove File Tree (Remote)",
+            on_pick=cfg.toggle_browse_path,
+        )
 
 
 class GitBranchScreen(ModalScreen):
     #Unified git screen with branch, status, log and actions.
 
     BINDINGS = [
-        Binding("escape", "app.pop_screen", "Close", show=False),
+        Binding("escape", "close", "Close", show=False),
         Binding("f", "fetch", "Fetch", show=False),
         Binding("p", "pull", "Pull", show=False),
-        Binding("c", "checkout_prompt", "Checkout", show=False),
+        Binding("P", "push", "Push", show=False),
+        Binding("m", "commit_prompt", "Commit", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -1118,6 +1204,7 @@ class GitBranchScreen(ModalScreen):
         self._ssh = ssh
         self._repo = repo_path
         self._on_close = on_close
+        self._changed = False
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="branch-dialog"):
@@ -1130,7 +1217,7 @@ class GitBranchScreen(ModalScreen):
             yield ListView(id="branch-list")
             yield Static("", id="branch-diff")
             yield Static(
-                "[dim]f=fetch  p=pull  enter=checkout  c=checkout  esc=close  * =current branch[/]",
+                "[dim]f=fetch  p=pull  P=push  m=commit  enter=checkout  esc=close  * =current branch[/]",
                 id="branch-hints",
             )
             yield Static("", id="git-output")
@@ -1189,6 +1276,12 @@ class GitBranchScreen(ModalScreen):
         #Keep focus on the branch list after refresh.
         lv.focus()
 
+    def action_close(self) -> None:
+        #Notify the app so the status bar shows the current branch.
+        if self._changed:
+            self._on_close()
+        self.app.pop_screen()
+
     def action_fetch(self) -> None:
         self.query_one("#git-output", Static).update("[yellow]Fetching...[/]")
         node = self._ssh.active.name
@@ -1204,10 +1297,29 @@ class GitBranchScreen(ModalScreen):
         node = self._ssh.active.name
         ok, msg = self._ssh.remote_git_pull(node, self._repo)
         if ok:
+            self._changed = True
             self.query_one("#git-output", Static).update(f"[green]Pull OK[/]\n{msg}")
             self._refresh()
         else:
             self.query_one("#git-output", Static).update(f"[red]Pull failed[/]\n{msg}")
+
+    def action_push(self) -> None:
+        self.query_one("#git-output", Static).update("[yellow]Pushing...[/]")
+        node = self._ssh.active.name
+        ok, msg = self._ssh.remote_git_push(node, self._repo)
+        if ok:
+            self._changed = True
+            self.query_one("#git-output", Static).update(f"[green]Push OK[/]\n{msg}")
+            self._refresh()
+        else:
+            self.query_one("#git-output", Static).update(f"[red]Push failed[/]\n{msg}")
+
+    def action_commit_prompt(self) -> None:
+        self.app.push_screen(GitCommitScreen(self._ssh, self._repo, self._after_commit))
+
+    def _after_commit(self) -> None:
+        self._changed = True
+        self._refresh()
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.list_view.id != "branch-list":
@@ -1218,10 +1330,74 @@ class GitBranchScreen(ModalScreen):
         node = self._ssh.active.name
         ok, msg = self._ssh.remote_git_checkout(node, self._repo, branch)
         if ok:
+            self._changed = True
             self.query_one("#git-output", Static).update(f"[green]Checked out {branch}[/]")
             self._refresh()
         else:
             self.query_one("#git-output", Static).update(f"[red]Checkout failed: {branch}[/]\n{msg}")
+
+
+class GitCommitScreen(ModalScreen):
+    #Message prompt for git commit -am.
+
+    BINDINGS = [Binding("escape", "app.pop_screen", "Cancel", show=False)]
+
+    DEFAULT_CSS = """
+    GitCommitScreen {
+        align: center middle;
+    }
+    #commit-dialog {
+        width: 60;
+        height: auto;
+        border: solid $primary;
+        background: $surface;
+        padding: 1 2;
+    }
+    #commit-dialog Input {
+        width: 1fr;
+        margin-bottom: 1;
+    }
+    #commit-dialog Button {
+        margin: 0 1;
+    }
+    """
+
+    def __init__(self, ssh, repo, on_done):
+        super().__init__()
+        self._ssh = ssh
+        self._repo = repo
+        self._on_done = on_done
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="commit-dialog"):
+            yield Label("Commit message (tracked changes, git commit -am)")
+            yield Input(placeholder="message", id="commit-input")
+            with Horizontal():
+                yield Button("Commit", id="commit-ok", variant="success")
+                yield Button("Cancel", id="commit-cancel", variant="error")
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._commit(event.value)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "commit-cancel":
+            self.app.pop_screen()
+            return
+        if event.button.id == "commit-ok":
+            self._commit(self.query_one("#commit-input", Input).value)
+
+    def _commit(self, message: str) -> None:
+        message = message.strip()
+        if not message:
+            self.notify("Empty message.", severity="warning")
+            return
+        node = self._ssh.active.name
+        ok, msg = self._ssh.remote_git_commit(node, self._repo, message)
+        self.app.pop_screen()
+        if ok:
+            self._on_done()
+        self.notify(msg.splitlines()[-1] if msg else ("OK" if ok else "Commit failed"),
+                    severity="information" if ok else "error")
 
 
 def main() -> None:

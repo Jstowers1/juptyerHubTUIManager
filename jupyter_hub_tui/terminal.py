@@ -12,6 +12,7 @@ import fcntl
 import termios
 import threading
 import queue as _queue
+from collections import deque
 from typing import Optional
 
 from rich.text import Text
@@ -87,6 +88,7 @@ ESCAPE_HATCH_KEYS = {
     "ctrl+h": "show_help",
     "ctrl+g": "git_picker",
     "ctrl+b": "git_branch",
+    "ctrl+f": "add_tree",
     "ctrl+w": "close_tab",
     "ctrl+o": "activate_venv",
 }
@@ -179,6 +181,10 @@ class Screen:
         #Alt screen snapshot for mode 1049. None = main screen.
         self._alt_saved = None
 
+        #Scrollback history. Rows pushed out by scrolling, newest last.
+        #Alt screen apps (vim, less) do not append to history.
+        self.history: deque[list[Cell]] = deque(maxlen=2000)
+
         self._mark_all()
 
     def resize(self, rows: int, cols: int) -> None:
@@ -244,7 +250,9 @@ class Screen:
         top = self._scroll_top
         bot = self._scroll_bot
         for _ in range(n):
-            self.grid.pop(top)
+            row = self.grid.pop(top)
+            if self._alt_saved is None and top == 0 and bot == self.rows - 1:
+                self.history.append(row)
             self.grid.insert(bot, [Cell() for _ in range(self.cols)])
         for r in range(top, bot + 1):
             self._mark(r)
@@ -705,9 +713,10 @@ class Screen:
         return ""
 
     def render_row(self, y: int) -> Text:
-        row = self.grid[y]
-        #Cursor cell renders reverse video. Draws the block cursor.
-        cur = self.cursor_visible and y == self.cy
+        return self._render_row(self.grid[y], self.cursor_visible and y == self.cy)
+
+    def _render_row(self, row: list[Cell], cur: bool) -> Text:
+        #Render one row of cells. History rows may be narrower than cols.
         parts: list[Text] = []
         run_text = ""
         run_style = ""
@@ -719,7 +728,7 @@ class Screen:
                 run_text = ""
                 run_style = ""
 
-        for x in range(self.cols):
+        for x in range(len(row)):
             cell = row[x]
             if cell.reverse:
                 fg = cell.bg
@@ -758,7 +767,7 @@ class Screen:
 
         flush()
         if not parts:
-            return Text(" " * self.cols)
+            return Text(" " * len(row))
         return Text("").join(parts)
 
 
@@ -803,6 +812,8 @@ class TerminalDisplay(Widget):
         self._reader_thread: Optional[threading.Thread] = None
         self._reader_stop = threading.Event()
         self._grid_lock = threading.Lock()
+        #Scrollback view. None = live screen. Else absolute top row index.
+        self._view_top: Optional[int] = None
 
     @property
     def pty_active(self) -> bool:
@@ -815,6 +826,23 @@ class TerminalDisplay(Widget):
                 event.stop()
                 self.app.call_later(self.app.run_action, ESCAPE_HATCH_KEYS[event.key])
                 return
+            #Scrollback keys. Shift+Up/Down scroll, Shift+PgUp/PgDn jump.
+            #Any typing snaps back to live.
+            if event.key in ("shift+up", "shift+down",
+                             "shift+pageup", "shift+pagedown"):
+                event.stop()
+                lines = {
+                    "shift+up": -1,
+                    "shift+down": 1,
+                    "shift+pageup": -max(1, self.size.height - 1),
+                    "shift+pagedown": max(1, self.size.height - 1),
+                }[event.key]
+                self._scroll_view(lines)
+                return
+            if self._view_top is not None:
+                self._view_top = None
+                self._cached_render = None
+                self.refresh()
             _dbg(f"on_key key={event.key!r} char={event.character!r} focused={self.has_focus}")
             self.send_key(event.key, event.character)
             event.stop()
@@ -1032,9 +1060,39 @@ class TerminalDisplay(Widget):
         self._pid = None
         self.post_message(self.Exited(status, self))
 
+    def _scroll_view(self, lines: int) -> None:
+        #Move the scrollback view. Negative goes into history.
+        #Clamp so view stays inside history+screen. 0 = oldest row.
+        total = len(self._screen.history) + self._screen.rows
+        h = max(1, self.size.height)
+        if lines >= 0 and self._view_top is None:
+            return
+        top = self._view_top if self._view_top is not None else total - h
+        top = max(0, min(top + lines, total - h))
+        self._view_top = top if top < total - h else None
+        self._cached_render = None
+        self.refresh()
+
+    def on_mouse_scroll_down(self, event) -> None:
+        self._scroll_view(3)
+
+    def on_mouse_scroll_up(self, event) -> None:
+        self._scroll_view(-3)
+
     def render(self) -> Text:
         if not self._overlay_done:
             return Text("Connecting...", style="yellow on #1d1f21")
+        if self._view_top is not None:
+            hist = self._screen.history
+            total = len(hist) + self._screen.rows
+            h = max(1, self.size.height)
+            top = min(self._view_top, total - h)
+            rows = [self._screen._render_row(hist[i], False)
+                    for i in range(top, min(top + h, len(hist)))]
+            rows += [self._screen.render_row(i - len(hist))
+                     for i in range(len(hist), len(hist) + self._screen.rows)
+                     if len(rows) < h]
+            return Text("\n").join(rows) or Text("")
         if self._cached_render is None:
             self._cached_render = Text("\n").join(self._row_cache)
         return self._cached_render
@@ -1210,5 +1268,21 @@ if __name__ == "__main__":
     assert "main" in s.render_row(0).plain, "main screen not restored"
     assert "VIM" not in "\n".join(s.render_row(y).plain for y in range(5)), "vim text leaked"
     print("test18 pass: alt screen restore")
+
+    #Self-check scrollback history capture.
+    s = Screen(10, 3)
+    s.feed("L0\r\nL1\r\nL2\r\nL3")
+    assert len(s.history) == 1, f"history={len(s.history)}"
+    assert s.history[0][0].char == "L" and s.history[0][1].char == "0", \
+        f"hist row={[c.char for c in s.history[0]]}"
+    print("test19 pass: scrollback history")
+
+    #Self-check alt screen scrolls do not enter history.
+    s = Screen(10, 3)
+    s.feed("\x1b[?1049h")
+    s.feed("A\r\nB\r\nC\r\nD")
+    assert len(s.history) == 0, f"alt leaked {len(s.history)} rows"
+    s.feed("\x1b[?1049l")
+    print("test20 pass: alt screen no history")
 
     print("ALL PASS")
