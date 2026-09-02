@@ -343,8 +343,9 @@ class SSHManager:
 
     def remote_vim_command(self, name: str, path: str) -> list[str]:
         #Vim over the shared master socket. The -tt flag from raw_ssh_command
-        #gives the remote side a pty.
-        return self.raw_ssh_command(name) + [f"vim {shlex.quote(path)}"]
+        #gives the remote side a pty. Keep tilde expansion alive.
+        return self.raw_ssh_command(name) + [
+            f"vim {self._quote_remote_path(path)}"]
 
     def scp_file(self, name: str, remote_path: str, local_path: str) -> bool:
         node = self._nodes[name]
@@ -531,6 +532,13 @@ def _self_check() -> None:
     assert hasattr(mgr, "write_remote_file"), "write_remote_file missing"
     assert not hasattr(mgr, "raw_ssh_command_for_notebook"), "old euporie notebook command should be deleted"
     assert not hasattr(mgr, "setup_keys"), "blocking setup_keys should be deleted"
+    vim = mgr.remote_vim_command("login", "~/repo/file.py")
+    vim_cmd = vim[-1]
+    assert vim_cmd == "vim ~/repo/file.py", f"tilde must stay unquoted: {vim_cmd}"
+    vim2 = mgr.remote_vim_command("login", "/data/user/x/file.py")
+    assert vim2[-1] == "vim /data/user/x/file.py", f"got {vim2[-1]}"
+    vim3 = mgr.remote_vim_command("login", '/data/we ird/f.py')
+    assert vim3[-1] == "vim '/data/we ird/f.py'", f"got {vim3[-1]}"
     print("SSH self-check passed")
 
 

@@ -767,10 +767,25 @@ class JupyterHubTUI(App):
         self._content.display = False
         term = TerminalDisplay(id=tab_id)
         pane = TabPane(file_path.rsplit("/", 1)[-1], term, id=tab_id)
+        #Await the mount. Focus before mount is a silent no-op, and then
+        #escape leaks to the app quit dialog instead of vim.
         tabs.add_pane(pane)
+        self.call_after_refresh(self._activate_vim_tab, tab_id, term,
+                                node_name, file_path)
+
+    def _activate_vim_tab(self, tab_id: str, term: TerminalDisplay,
+                          node_name: str, file_path: str) -> None:
+        #Mount is async. Retry after refresh until the pane is real,
+        #else focus() is a no-op and escape leaks to the quit dialog.
+        if not term.is_mounted:
+            self.call_after_refresh(self._activate_vim_tab, tab_id, term,
+                                    node_name, file_path)
+            return
+        tabs = self.query_one("#term-tabs", TabbedContent)
         tabs.active = tab_id
         self._term.pause_polling()
         term.start(self._ssh.remote_vim_command(node_name, file_path))
+        term.can_focus = True
         term.focus()
         self.notify(f"Opening {file_path.rsplit('/', 1)[-1]} in vim")
 
